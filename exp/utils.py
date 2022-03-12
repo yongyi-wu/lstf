@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
 
+from datetime import datetime
 import logging
 import os
 import random
+import re
 import sys
 
 import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
-from .data import ETTDataset
+from .data import ETTDataset, OtherDataset
 
 
 def seed_everything(seed): 
@@ -45,11 +48,9 @@ class BaseEstimator(object):
     """A wrapper class to perform training, evluation or testing while accumulating and logging results"""
     def __init__(self, cfg): 
         self.cfg = cfg
-        self.model = self._get_model()
+        self.model = self.get_model()
         self.criterion, self.optimizer, self.scheduler = self._get_auxiliaries()
         self.device = self._get_devices()
-        self.logger = self.cfg.logger
-        self.writer = self.cfg.writer
         self.mode = None # {'train', 'dev', 'test'}
 
         self.epochs = 0
@@ -57,27 +58,32 @@ class BaseEstimator(object):
         self.dev_steps = 0
         self.best_dev_loss = float('inf')
 
-        make_if_not_exists(self.cfg.ckpt_dir)
-        self.ckpt_path = os.path.join(self.cfg.ckpt_dir, '{}.pt'.format(self.cfg.config))
+        time = datetime.now().strftime('%m-%d_%H-%M')
+        self.ckpt = os.path.join(self.cfg.ckpt, self.cfg.config, time)
+        make_if_not_exists(self.ckpt)
+        self.logger = config_logging(self.cfg.ckpt)
+        self.logger.info('[CONFIG]\t{}'.format(self.cfg.config))
+        self.writer = SummaryWriter(self.ckpt)
+        self.ckpt_path = os.path.join(self.ckpt, 'ckpt.pt')
 
     def get_data(self): 
-        if self.cfg.data == 'ETT': 
+        if re.match(r'ETT[hm]\d', self.cfg.data): 
             Data = ETTDataset
         else: 
-            raise KeyError(self.cfg.data)
+            Data = OtherDataset
         data_path = self.cfg.data_path
         len_enc, len_label, len_pred = self.cfg.len_enc, self.cfg.len_label, self.cfg.len_pred
         freq = self.cfg.freq
 
         trainset = Data('train', data_path, len_enc, len_label, len_pred, freq)
-        trainloader = DataLoader(trainset, self.cfg.batch_size, shuffle=True)
-        
+        trainloader = DataLoader(trainset, self.cfg.batch_size, shuffle=True, drop_last=True)
+
         devset = Data('dev', data_path, len_enc, len_label, len_pred, freq)
         devloader = DataLoader(devset, self.cfg.batch_size * 4, shuffle=False)
         
         testset = Data('test', data_path, len_enc, len_label, len_pred, freq)
         testloader = DataLoader(testset, self.cfg.batch_size * 4, shuffle=False)
-        
+
         return trainloader, devloader, testloader
 
     def get_model(self): 
@@ -95,7 +101,7 @@ class BaseEstimator(object):
         if self.cfg.lr_schedule: 
             scheduler = optim.lr_scheduler.LambdaLR(
                 optimizer, 
-                lambda epoch: 0.5 ** ((epoch - 1) // 1), 
+                lambda epoch: 0.5 ** (epoch // 1), 
                 verbose=True
             )
         else: 
@@ -103,10 +109,13 @@ class BaseEstimator(object):
         return criterion, optimizer, scheduler
 
     def _get_devices(self): 
-        if self.cfg.use_gpu: 
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(self.cfg.gpu) if not self.cfg.use_multi_gpu else self.cfg.devices
-            device = torch.device('cuda:{}'.format(self.cfg.gpu))
-            print('Use CUDA: {}'.format(self.cfg.gpu))
+        if torch.cuda.is_available() and len(self.cfg.devices) > 0: 
+            device = torch.device('cuda:{}'.format(self.cfg.devices[0]))
+            self.model.to(device)
+            self.criterion.to(device)
+            if len(self.cfg.devices) > 1: 
+                self.model = nn.DataParallel(self.model, device_ids=self.cfg.devices)
+            print('Use CUDA: {}'.format(self.cfg.devices))
         else: 
             device = torch.device('cpu')
             print('Use CPU')
@@ -122,27 +131,28 @@ class BaseEstimator(object):
         Input
         ----------
         data
-            A dictionary of mini-batch input obtained from Dataset.__getitem__, each with shape (B, len_seq), type torch.tensor
+            A dictionary of mini-batch input obtained from Dataset.__getitem__, each with shape (B, len, d), type torch.tensor
             Before fed into the model, inputs should be convert to appropriate type(s) and device(s)
 
         Output
         ----------
         loss
             A scalar for the entire batch, type float; None if no label provided
-        prob
-            Model predictions as the probability for each label, shape (B, n_labels), type np.ndarray
+        yhat
+            Model predictions as the probability for each label, shape (B, len_pred, d_dec_out), type np.ndarray
         y
-            Ground true labels for the batch, shape (B, n_labels), type np.ndarray; None if no label provided
+            Ground true labels for the batch, shape (B, len_pred, d_dec_out), type np.ndarray; None if no label provided
         """
         raise NotImplementedError('Implement it in the subclass')
 
     def _write_stats(self, stats): 
-        if self.writer is not None: 
-            self.writer.add_scalar(
-                '{}/loss'.format(self.mode), 
-                stats['loss'], 
-                self.train_steps if self.mode == 'train' else self.dev_steps
-            )
+        if self.mode == 'test': 
+            return
+        self.writer.add_scalar(
+            '{}/loss'.format(self.mode), 
+            stats['loss'], 
+            self.train_steps if self.mode == 'train' else self.dev_steps
+        )
 
     def train(self, trainloader, devloader=None): 
         if trainloader is None: 
@@ -168,19 +178,23 @@ class BaseEstimator(object):
         tbar = tqdm(evalloader, dynamic_ncols=True)
         eval_loss = []
         ys = []
-        probs = []
+        yhats = []
         for data in tbar: 
-            loss, prob, y = self._step(data)
+            loss, yhat, y = self._step(data)
             if self.mode == 'dev': 
                 tbar.set_description('dev/loss - {:.4f}'.format(loss))
-                eval_loss.append(loss)
-                ys.append(y)
-            probs.append(prob)
-        loss = np.mean(eval_loss).item() if self.mode == 'dev' else None
-        ys = np.concatenate(ys, axis=0) if self.mode == 'dev' else None
-        probs = np.concatenate(probs, axis=0)
+            eval_loss.append(loss)
+            ys.append(y)
+            yhats.append(yhat)
+        loss = np.mean(eval_loss).item()
+        ys = np.concatenate(ys, axis=0)
+        yhats = np.concatenate(yhats, axis=0)
+        if self.mode == 'dev': 
+            self.logger.info('epoch: {}\tdev_loss: {:.4f}'.format(self.epochs, loss))
+        elif self.mode == 'test': 
+            self.logger.info('[TEST]\ttest_loss: {:.4f}'.format(loss))
         self._write_stats({'loss': loss})
-        return loss, probs, ys
+        return loss, yhats, ys
 
     def dev(self, devloader): 
         if devloader is None: 
@@ -190,10 +204,11 @@ class BaseEstimator(object):
         self.dev_steps += 1
         return results
 
-    def test(self, testloader): 
+    def test(self, testloader, ckpt_path): 
         if testloader is None: 
             return None
         self.mode = 'test'
+        self.load(ckpt_path)
         results = self._eval(testloader)
         return results
 
@@ -202,14 +217,12 @@ class BaseEstimator(object):
         if self.best_dev_loss is None or dev_loss < self.best_dev_loss: 
             self.best_dev_loss = dev_loss
             self.save(self.ckpt_path)
-            if self.logger is not None: 
-                self.logger.info('Saving checkpoint: {}'.format(self.ckpt_path))
+            self.logger.info('Saving checkpoint: {}'.format(self.ckpt_path))
             self.patience = self.cfg.patience
             return False
         else: 
             self.patience -= 1
-            if self.logger is not None: 
-                self.logger.info('Patience: {} / {}'.format(self.patience, self.cfg.patience))
+            self.logger.info('Patience: {} / {}'.format(self.patience, self.cfg.patience))
             if self.patience <= 0: 
                 return True
             

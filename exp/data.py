@@ -98,13 +98,12 @@ def get_temporal_features(dates, timeenc=1, freq='h'):
             'h':['month', 'day', 'weekday', 'hour'], 
             't':['month', 'day', 'weekday', 'hour', 'minute']
         }
-        dates['month'] = dates.date.apply(lambda row: row.month, True)
-        dates['day'] = dates.date.apply(lambda row: row.day, True)
-        dates['weekday'] = dates.date.apply(lambda row: row.weekday(), True)
-        dates['hour'] = dates.date.apply(lambda row: row.hour, True)
-        dates['minute'] = dates.date.apply(lambda row: row.minute, True)
-        dates['minute'] = dates.minute.map(lambda x: x // 15)
-        
+        dates['month'] = dates['date'].apply(lambda row: row.month, True)
+        dates['day'] = dates['date'].apply(lambda row: row.day, True)
+        dates['weekday'] = dates['date'].apply(lambda row: row.weekday(), True)
+        dates['hour'] = dates['date'].apply(lambda row: row.hour, True)
+        dates['minute'] = dates['date'].apply(lambda row: row.minute, True)
+        dates['minute'] = dates['minute'].map(lambda x: x // 15)
         freq = freq.lower()
         if freq in freq_map: 
             return dates[freq_map[freq]].values
@@ -123,13 +122,12 @@ def get_temporal_features(dates, timeenc=1, freq='h'):
             offsets.Minute: [MinuteOfHour, HourOfDay, DayOfWeek, DayOfMonth, DayOfYear],
             offsets.Second: [SecondOfMinute, MinuteOfHour, HourOfDay, DayOfWeek, DayOfMonth, DayOfYear],
         }
-
         offset = to_offset(freq)
         for offset_type, feature_classes in features_by_offsets.items(): 
             if isinstance(offset, offset_type): 
                 features = [cls() for cls in feature_classes]
-                dates = pd.to_datetime(dates['dates'].values)
-                return np.hstack([feat(dates) for feat in features])
+                dates = pd.to_datetime(dates['date'].values)
+                return np.array([feat(dates) for feat in features]).T
         raise RuntimeError('Unsupported frequency flag: {}'.format(freq))
 
 
@@ -171,8 +169,8 @@ class BaseDataset(Dataset):
     def __getitem__(self, index): 
         enc_begin = index
         enc_end = enc_begin + self.len_enc
-        dec_begin = enc_end - self.len_label
-        dec_end = dec_begin + self.len_pred
+        dec_begin = max(enc_end - self.len_label, 0)
+        dec_end = dec_begin + self.len_label + self.len_pred
 
         x = self.data[enc_begin:enc_end]
         x_time = self.time[enc_begin:enc_end]
@@ -220,6 +218,45 @@ class ETTDataset(BaseDataset):
         self.data = self._scaler.transform(df_data[start:end].values)
 
         # Extract temporal features
-        time = pd.to_datetime(df.iloc[start:end, 0])
+        time = df.iloc[start:end, :1]
+        time['date'] = pd.to_datetime(time['date'])
         # NOTE: For both ETTh and ETTm, always use timeenc = 1 and freq = 'h'
+        self.time = get_temporal_features(time, timeenc=1, freq='h')
+
+
+class OtherDataset(BaseDataset): 
+    def _read_data(self, data_path): 
+        df = pd.read_csv(data_path)
+        assert 'date' in df.columns
+        cols = list(df.columns)
+        cols.remove('date')
+        df = df[['date'] + cols]
+        df_data = df.iloc[:, 1:]
+        # df_time = df.iloc[:, :1]
+
+        # Retrieve appropriate index
+        n_train = int(len(df) * 0.7)
+        n_test = int(len(df) * 0.2)
+        n_dev = len(df) - n_train - n_test
+        borders = [0, n_train, n_train + n_dev, n_train + n_dev + n_test]
+        train_start, train_end = borders[0], borders[1]
+        dev_start, dev_end = borders[1] - self.len_label, borders[2]
+        test_start, test_end = borders[2] - self.len_label, borders[3]
+
+        if self.mode == 'train': 
+            start, end = train_start, train_end
+        elif self.mode == 'dev': 
+            start, end = dev_start, dev_end
+        elif self.mode == 'test': 
+            start, end = test_start, test_end
+
+        # Scale the data based on the training dataset
+        self._scaler = StandardScaler()
+        self._scaler.fit(df_data[train_start:train_end].values)
+        self.data = self._scaler.transform(df_data[start:end].values)
+
+        # Extract temporal features
+        time = df.iloc[start:end, :1]
+        time['date'] = pd.to_datetime(time['date'])
+        # NOTE: Always use timeenc = 1 and freq = 'h'
         self.time = get_temporal_features(time, timeenc=1, freq='h')

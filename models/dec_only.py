@@ -32,6 +32,7 @@ class DecoderOnly(nn.Module):
                 output_attn=output_attn
             ) for _ in range(n_dec_layers)
         ])
+        self.dec_norm = nn.LayerNorm(d_model)
         self.out_proj = nn.Linear(d_model, d_dec_out)
 
     def forward(
@@ -65,6 +66,7 @@ class DecoderOnly(nn.Module):
                 self_attn_mask=dec_self_mask
             )
             dec_self_weights.append(self_attn_weight)
+        dec_out = self.dec_norm(dec_out)
         # Output projection
         out = self.out_proj(dec_out)
         return out, ((None, None), (dec_self_weights, None))
@@ -83,7 +85,7 @@ class DecoderOnlyEstimator(BaseEstimator):
             n_heads=self.cfg.n_heads, 
             n_dec_layers=self.cfg.n_dec_layers, 
             d_ff=self.cfg.d_ff, 
-            d_dropout=self.cfg.d_dropout, 
+            dropout=self.cfg.dropout, 
             freq=self.cfg.freq, 
             output_attn=self.cfg.output_attn
         )
@@ -100,12 +102,14 @@ class DecoderOnlyEstimator(BaseEstimator):
         if self.mode == 'train': 
             self.optimizer.zero_grad()
 
-        yhat = self.model(
+        yhat, _ = self.model(
             dec_y, dec_y_time, 
             dec_self_mask=get_triangular_causal_mask(dec_y)
         )
+        yhat = yhat[:, -self.cfg.len_pred:, :]
+        y = y[:, -self.cfg.len_pred:, :]
+
         loss = self.criterion(yhat, y)
-        
         if self.mode == 'train': 
             loss.backward()
             self.optimizer.step()

@@ -33,6 +33,7 @@ class EncoderDecoder(nn.Module):
                 output_attn=output_attn
             ) for _ in range(n_enc_layers)
         ])
+        self.enc_norm = nn.LayerNorm(d_model)
         self.decoder = nn.ModuleList([
             DecoderLayer(
                 MultiheadAttention(d_model, n_heads, dropout=dropout), 
@@ -43,6 +44,7 @@ class EncoderDecoder(nn.Module):
                 output_attn=output_attn
             ) for _ in range(n_dec_layers)
         ])
+        self.dec_norm = nn.LayerNorm(d_model)
         self.out_proj = nn.Linear(d_model, d_dec_out)
 
     def forward(
@@ -82,11 +84,12 @@ class EncoderDecoder(nn.Module):
         enc_out = self.enc_embedding(x_enc, x_time_enc)
         enc_self_weights = []
         for layer in self.encoder: 
-            enc_out, (self_attn_weight, ) = layer(
+            enc_out, (self_attn_weight, _) = layer(
                 enc_out, 
                 self_attn_mask=enc_self_mask
             )
             enc_self_weights.append(self_attn_weight)
+        enc_out = self.enc_norm(enc_out)
         # Decoder
         dec_out = self.dec_embedding(x_dec, x_time_dec)
         dec_self_weights = []
@@ -99,6 +102,7 @@ class EncoderDecoder(nn.Module):
             )
             dec_self_weights.append(self_attn_weight)
             dec_enc_weights.append(cross_attn_weight)
+        dec_out = self.dec_norm(dec_out)
         # Output projection
         out = self.out_proj(dec_out)
         return out, ((enc_self_weights, None), (dec_self_weights, dec_enc_weights))
@@ -133,12 +137,14 @@ class EncoderDecoderEstimator(BaseEstimator):
         if self.mode == 'train': 
             self.optimizer.zero_grad()
 
-        yhat = self.model(
+        yhat, _ = self.model(
             enc_x, enc_x_time, dec_y, dec_y_time, 
             dec_self_mask=get_triangular_causal_mask(dec_y)
         )
+        yhat = yhat[:, -self.cfg.len_pred:, :]
+        y = y[:, -self.cfg.len_pred:, :]
+
         loss = self.criterion(yhat, y)
-        
         if self.mode == 'train': 
             loss.backward()
             self.optimizer.step()

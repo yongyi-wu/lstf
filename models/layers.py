@@ -101,8 +101,8 @@ class FFN(nn.Module):
         """
         out = self.conv1(x.transpose(-1, 1))
         out = self.dropout(self.activation(out))
-        out = self.dropout(self.conv2(out)).transpose(-1, 1)
-        out = self.norm(x + out)
+        out = self.conv2(out).transpose(-1, 1)
+        out = self.norm(x + self.dropout(out))
         return out
 
 
@@ -136,7 +136,7 @@ class EncoderLayer(nn.Module):
         out, self_attn_weight = self.self_attn(
             x, x, x, 
             need_weights=self.output_attn, 
-            attn_mask=self_attn_mask
+            attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
         )
         x = self.norm1(x + self.dropout(out))
         # FFN
@@ -182,7 +182,7 @@ class DecoderLayer(nn.Module):
         out, self_attn_weight = self.self_attn(
             x, x, x, 
             need_weights=self.output_attn, 
-            attn_mask=self_attn_mask
+            attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
         )
         x = self.norm1(x + self.dropout(out))
         # Cross-attention
@@ -190,7 +190,7 @@ class DecoderLayer(nn.Module):
         out, cross_attn_weight = self.cross_attn(
             x, enc_out, enc_out, 
             need_weights=self.output_attn, 
-            attn_mask=cross_attn_mask
+            attn_mask=None if cross_attn_mask is None else cross_attn_mask.squeeze()
         )
         x = self.norm2(x + self.dropout(out))
         # FFN
@@ -204,5 +204,5 @@ def get_triangular_causal_mask(x):
     device = x.device
     len_seq = x.shape[1]
     return torch.triu(
-        torch.ones((len_seq, len_seq)), diagonal=1
+        torch.ones((1, 1, len_seq, len_seq)), diagonal=1
     ).to(device, dtype=torch.bool)
