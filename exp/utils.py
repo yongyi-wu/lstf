@@ -180,7 +180,8 @@ class BaseEstimator(object):
         ys = []
         yhats = []
         for data in tbar: 
-            loss, yhat, y = self._step(data)
+            with torch.no_grad(): 
+                loss, yhat, y = self._step(data)
             if self.mode == 'dev': 
                 tbar.set_description('dev/loss - {:.4f}'.format(loss))
             eval_loss.append(loss)

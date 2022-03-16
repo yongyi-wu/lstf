@@ -238,7 +238,10 @@ class OtherDataset(BaseDataset):
         n_train = int(len(df) * 0.7)
         n_test = int(len(df) * 0.2)
         n_dev = len(df) - n_train - n_test
-        borders = [0, n_train, n_train + n_dev, n_train + n_dev + n_test]
+        if n_dev < self.len_enc + self.len_pred: 
+            # n_dev (int(len(df) * 0.2)) is too small
+            n_test = n_dev = (n_test + n_dev) // 2
+        borders = [0, n_train, n_train + n_dev, len(df)]
         train_start, train_end = borders[0], borders[1]
         dev_start, dev_end = borders[1] - self.len_label, borders[2]
         test_start, test_end = borders[2] - self.len_label, borders[3]
