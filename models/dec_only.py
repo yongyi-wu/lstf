@@ -2,9 +2,10 @@
 
 import torch
 from torch import nn
-from torch.nn import MultiheadAttention
 
-from .layers import DataEmbedding, EncoderLayer, get_triangular_causal_mask
+from .layers import (
+    DataEmbedding, EncoderLayer, MultiheadAttention, get_triangular_causal_mask
+)
 from exp import BaseEstimator
 
 
@@ -25,7 +26,7 @@ class DecoderOnly(nn.Module):
         self.decoder = nn.ModuleList([
             # EncoderLayer is used here because no cross attention is performed
             EncoderLayer(
-                MultiheadAttention(d_model, n_heads, dropout=dropout), 
+                MultiheadAttention(d_model, n_heads=n_heads, dropout=dropout), 
                 d_model, 
                 d_ff, 
                 dropout=dropout, 

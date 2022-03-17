@@ -106,6 +106,128 @@ class FFN(nn.Module):
         return out
 
 
+class MultiheadAttention(nn.Module): 
+    def __init__(self, d_model, n_heads=8, dropout=0.1): 
+        super().__init__()
+        assert d_model % n_heads == 0
+        d_qkv = d_model // n_heads
+        d_inner = d_qkv * n_heads
+        self.scale = d_model ** (-0.5)
+        self.Q_proj = nn.Linear(d_model, d_inner)
+        self.K_proj = nn.Linear(d_model, d_inner)
+        self.V_proj = nn.Linear(d_model, d_inner)
+        self.out_proj = nn.Linear(d_inner, d_model)
+        # (len, B, d_inner) -> (len, B, n_heads, d_qkv)
+        self.reshape_for_attn = lambda x: x.reshape(*x.shape[:-1], n_heads, d_qkv)
+        # (len, B, n_heads, d_qkv) -> (len, B, d_inner)
+        self.recover_from_attn = lambda x: x.reshape(*x.shape[:-2], d_inner)
+        self.dropout = nn.Dropout(dropout)
+        self.n_heads = n_heads
+        self.disable_inc() # Incremental decoding is disabled by default
+
+    def multihead_attention(self, Q, K, V, attn_mask=None): 
+        attn_scores = torch.einsum('ibnd, jbnd -> ijbn', (Q, K)) * self.scale
+        if attn_mask is not None: 
+            assert attn_mask.dtype == torch.bool, 'Only bool type is supported for masks.'
+            assert attn_mask.ndim == 2, 'Only 2D attention mask is supported'
+            assert attn_mask.shape == attn_scores.shape[:2], 'Incorrect mask shape: {}. Expect: {}'.format(attn_mask.shape, attn_scores.shape[:2])
+            attn_mask = attn_mask.view(*attn_mask.shape, 1, 1)
+            attn_scores.masked_fill_(attn_mask, float('-inf'))
+        attn_weights = torch.softmax(attn_scores, dim=1)
+        attn_weights = self.dropout(attn_weights)
+        out = torch.einsum('ijbn, jbnd -> ibnd', (attn_weights, V))
+        out = self.recover_from_attn(out)
+        attn_weights = attn_weights.permute(2, 3, 0, 1)
+        return out, attn_weights
+
+    def forward(self, query, key, value, need_weights=False, attn_mask=None): 
+        """
+        Input
+        ----------
+        query
+            Shape (L, B, d_model)
+        key
+            Shape (S, B, d_model)
+        value
+            Shape (S, B, d_model)
+        attn_mask
+            None or Shape (L, S) with type torch.bool
+
+        Output
+        ----------
+        out
+            Shape (S, B, d_model)
+        attn
+            None or Shape (B, n_heads, L, S)
+        """
+        if self.incremental_decoding: 
+            # sanity check
+            assert hasattr(self, 'K') and hasattr(self, 'V')
+            assert attn_mask is None # automatically causal
+            return self.inc_decode(query, key, value, need_weights=need_weights)
+        # in-sample projection
+        Q, K, V = (
+            self.reshape_for_attn(self.Q_proj(query)), 
+            self.reshape_for_attn(self.K_proj(key)), 
+            self.reshape_for_attn(self.V_proj(value))
+        )
+        # attention mechanism
+        out, attn = self.multihead_attention(Q, K, V, attn_mask=attn_mask)
+        # output layer
+        out = self.out_proj(out)
+        return out, attn if need_weights else None
+
+    @property
+    def incremental_decoding(self): 
+        return self._inc
+
+    def enable_inc(self): 
+        self._inc = True
+
+    def disable_inc(self): 
+        self._inc = False
+
+    def reset_inc(self): 
+        """Clear cached computed keys and values"""
+        self.K = None # Shape (S, B, n_heads, d_qkv)
+        self.V = None # Shape (S, B, n_heads, d_qkv)
+
+    def inc_decode(self, new_query, new_key, new_value, need_weights=False, attn_mask=None): 
+        """
+        Input
+        ----------
+        new_query
+            Shape (l, B, d_model)
+        new_key
+            Shape (l, B, d_model)
+        new_value
+            Shape (l, B, d_model)
+        attn_mask
+            None by assumption
+
+        Output
+        ----------
+        out
+            Shape (l, B, d_model)
+        attn
+            None or Shape (l, S, B, n_heads)
+        """
+        # projection
+        q, k, v = (
+            self.reshape_for_attn(self.Q_proj(new_query)), 
+            self.reshape_for_attn(self.K_proj(new_key)), 
+            self.reshape_for_attn(self.V_proj(new_value))
+        )
+        # concatenation
+        self.K = k if self.K is None else torch.cat((self.K, k), dim=0).contiguous()
+        self.V = v if self.V is None else torch.cat((self.V, v), dim=0).contiguous()
+        # one-step decoding
+        out, attn = self.multihead_attention(q, self.K, self.V, attn_mask=attn_mask)
+        # output
+        out = self.out_proj(out)
+        return out, attn if need_weights else None
+
+
 class EncoderLayer(nn.Module): 
     def __init__(self, self_attn, d_model, d_ff, dropout=0.1, output_attn=False): 
         super().__init__()

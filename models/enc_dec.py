@@ -2,9 +2,10 @@
 
 import torch
 from torch import nn
-from torch.nn import MultiheadAttention
 
-from .layers import DataEmbedding, EncoderLayer, DecoderLayer, get_triangular_causal_mask
+from .layers import (
+    DataEmbedding, MultiheadAttention, EncoderLayer, DecoderLayer, get_triangular_causal_mask
+)
 from exp import BaseEstimator
 
 
@@ -26,7 +27,7 @@ class EncoderDecoder(nn.Module):
         self.dec_embedding = DataEmbedding(d_dec_in, d_model, freq, dropout)
         self.encoder = nn.ModuleList([
             EncoderLayer(
-                MultiheadAttention(d_model, n_heads, dropout=dropout), 
+                MultiheadAttention(d_model, n_heads=n_heads, dropout=dropout), 
                 d_model, 
                 d_ff, 
                 dropout=dropout, 
@@ -36,8 +37,8 @@ class EncoderDecoder(nn.Module):
         self.enc_norm = nn.LayerNorm(d_model)
         self.decoder = nn.ModuleList([
             DecoderLayer(
-                MultiheadAttention(d_model, n_heads, dropout=dropout), 
-                MultiheadAttention(d_model, n_heads, dropout=dropout), 
+                MultiheadAttention(d_model, n_heads=n_heads, dropout=dropout), 
+                MultiheadAttention(d_model, n_heads=n_heads, dropout=dropout), 
                 d_model, 
                 d_ff, 
                 dropout=dropout, 
@@ -46,6 +47,32 @@ class EncoderDecoder(nn.Module):
         ])
         self.dec_norm = nn.LayerNorm(d_model)
         self.out_proj = nn.Linear(d_model, d_dec_out)
+
+    def encode(self, enc_in, self_attn_mask=None): 
+        enc_out = enc_in
+        enc_self_weights = []
+        for layer in self.encoder: 
+            enc_out, (self_attn_weight, _) = layer(
+                enc_out, 
+                self_attn_mask=self_attn_mask
+            )
+            enc_self_weights.append(self_attn_weight)
+        enc_out = self.enc_norm(enc_out)
+        return enc_out, (enc_self_weights, None)
+
+    def decode(self, enc_out, dec_in, self_attn_mask=None, cross_attn_mask=None): 
+        dec_out = dec_in
+        dec_self_weights = []
+        dec_enc_weights = []
+        for layer in self.decoder: 
+            dec_out, (self_attn_weight, cross_attn_weight) = layer(
+                dec_out, enc_out, 
+                self_attn_mask=self_attn_mask, cross_attn_mask=cross_attn_mask
+            )
+            dec_self_weights.append(self_attn_weight)
+            dec_enc_weights.append(cross_attn_weight)
+        dec_out = self.dec_norm(dec_out)
+        return dec_out, (dec_self_weights, dec_enc_weights)
 
     def forward(
         self, 
@@ -81,28 +108,17 @@ class EncoderDecoder(nn.Module):
             Attention weights for each layer
         """
         # Encoder
-        enc_out = self.enc_embedding(x_enc, x_time_enc)
-        enc_self_weights = []
-        for layer in self.encoder: 
-            enc_out, (self_attn_weight, _) = layer(
-                enc_out, 
-                self_attn_mask=enc_self_mask
-            )
-            enc_self_weights.append(self_attn_weight)
-        enc_out = self.enc_norm(enc_out)
+        enc_in = self.enc_embedding(x_enc, x_time_enc)
+        enc_out, (enc_self_weights, _) = self.encode(
+            enc_in, 
+            self_attn_mask=enc_self_mask
+        )
         # Decoder
-        dec_out = self.dec_embedding(x_dec, x_time_dec)
-        dec_self_weights = []
-        dec_enc_weights = []
-        for layer in self.decoder: 
-            dec_out, (self_attn_weight, cross_attn_weight) = layer(
-                dec_out, enc_out, 
-                self_attn_mask=dec_self_mask, 
-                cross_attn_mask=dec_enc_mask
-            )
-            dec_self_weights.append(self_attn_weight)
-            dec_enc_weights.append(cross_attn_weight)
-        dec_out = self.dec_norm(dec_out)
+        dec_in = self.dec_embedding(x_dec, x_time_dec)
+        dec_out, (dec_self_weights, dec_enc_weights) = self.decode(
+            enc_out, dec_in, 
+            self_attn_mask=dec_self_mask, cross_attn_mask=dec_enc_mask
+        )
         # Output projection
         out = self.out_proj(dec_out)
         return out, ((enc_self_weights, None), (dec_self_weights, dec_enc_weights))

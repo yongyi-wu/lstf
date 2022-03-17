@@ -5,7 +5,7 @@ import os
 
 import torch
 
-from models import EncoderDecoderEstimator, DecoderOnlyEstimator
+from models import EncoderDecoderEstimator, DecoderOnlyEstimator, AutoregressionEstimator
 
 
 def parse_args(): 
@@ -23,7 +23,7 @@ def parse_args():
     task.add_argument('--len_pred', type=int, help='One-path prediction length of the decoder')
 
     model = parser.add_argument_group('Model')
-    model.add_argument('--model', type=str, choices=['enc-dec', 'dec'])
+    model.add_argument('--model', type=str, choices=['enc-dec', 'dec', 'auto'], help='Architecture name')
     model.add_argument('--d_enc_in', type=int, help='Dimension of encoder input')
     model.add_argument('--d_dec_in', type=int, help='Dimension of decoder input')
     model.add_argument('--d_dec_out', type=int, help='Dimension of decoder output')
@@ -61,6 +61,8 @@ def main():
         Estimator = EncoderDecoderEstimator
     elif cfg.model == 'dec': 
         Estimator = DecoderOnlyEstimator
+    elif cfg.model == 'auto': 
+        Estimator = AutoregressionEstimator
     else: 
         raise KeyError(cfg.model)
 

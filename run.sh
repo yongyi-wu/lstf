@@ -5,11 +5,11 @@ conda activate informer
 
 
 data=ETTm2
-for model in enc-dec dec
+for model in enc-dec dec auto
 do
     for l_pred in 96 192 336 720
     do
-        if [ $model = enc-dec ]
+        if [ $model = enc-dec ] || [ $model = auto ]
         then
             ne=2
             nd=1
@@ -42,11 +42,11 @@ done
 
 
 data=Electricity
-for model in enc-dec dec
+for model in enc-dec dec auto
 do
     for l_pred in 96 192 336 720
     do
-        if [ $model = enc-dec ]
+        if [ $model = enc-dec ] || [ $model = auto ]
         then
             ne=2
             nd=1
@@ -79,11 +79,11 @@ done
 
 
 data=Exchange
-for model in enc-dec dec
+for model in enc-dec dec auto
 do
     for l_pred in 96 192 336 720
     do
-        if [ $model = enc-dec ]
+        if [ $model = enc-dec ] || [ $model = auto ]
         then
             ne=2
             nd=1
@@ -116,11 +116,11 @@ done
 
 
 data=Traffic
-for model in enc-dec dec
+for model in enc-dec dec auto
 do
     for l_pred in 96 192 336 720
     do
-        if [ $model = enc-dec ]
+        if [ $model = enc-dec ] || [ $model = auto ]
         then
             ne=2
             nd=1
@@ -153,11 +153,11 @@ done
 
 
 data=Weather
-for model in enc-dec dec
+for model in enc-dec dec auto
 do
     for l_pred in 96 192 336 720
     do
-        if [ $model = enc-dec ]
+        if [ $model = enc-dec ] || [ $model = auto ]
         then
             ne=2
             nd=1
@@ -190,11 +190,11 @@ done
 
 
 data=ILI
-for model in enc-dec dec
+for model in enc-dec dec auto
 do
     for l_pred in 24 36 48 60
     do
-        if [ $model = enc-dec ]
+        if [ $model = enc-dec ] || [ $model = auto ]
         then
             ne=2
             nd=1
