@@ -7,6 +7,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def get_triangular_causal_mask(x): 
+    # x: Shape (B, len_seq, d_model)
+    device = x.device
+    len_seq = x.shape[1]
+    return torch.triu(
+        torch.ones((1, 1, len_seq, len_seq)), diagonal=1
+    ).to(device, dtype=torch.bool)
+
+
 class PositionalEmbedding(nn.Module): 
     def __init__(self, d_model, len_max=4096): 
         super().__init__()
@@ -64,17 +73,22 @@ class TemporalEmbedding(nn.Module):
 
 
 class DataEmbedding(nn.Module): 
-    def __init__(self, c_in, d_model, freq='h', dropout=0.1): 
+    def __init__(self, c_in, d_model, pos=True, freq='h', dropout=0.1): 
         super().__init__()
-
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
-        self.position_embedding = PositionalEmbedding(d_model=d_model)
+        self.pos = pos
+        if self.pos: 
+            self.position_embedding = PositionalEmbedding(d_model=d_model)
         self.temporal_embedding = TemporalEmbedding(d_model=d_model, freq=freq)
 
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark): 
-        x = self.value_embedding(x) + self.position_embedding(x) + self.temporal_embedding(x_mark)
+        x = (
+            self.value_embedding(x) + \
+            self.position_embedding(x) if self.pos else 0 + \
+            self.temporal_embedding(x_mark)
+        )
         return self.dropout(x)
 
 
@@ -83,7 +97,6 @@ class FFN(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
         self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
-        self.norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
         self.activation = F.gelu
 
@@ -96,14 +109,13 @@ class FFN(nn.Module):
         
         Output
         ----------
-        out
+        x
             Shape (B, len_seq, d_model)
         """
-        out = self.conv1(x.transpose(-1, 1))
-        out = self.dropout(self.activation(out))
-        out = self.conv2(out).transpose(-1, 1)
-        out = self.norm(x + self.dropout(out))
-        return out
+        x = self.conv1(x.transpose(-1, 1))
+        x = self.dropout(self.activation(x))
+        x = self.conv2(x).transpose(-1, 1)
+        return x
 
 
 class MultiheadAttention(nn.Module): 
@@ -118,9 +130,9 @@ class MultiheadAttention(nn.Module):
         self.V_proj = nn.Linear(d_model, d_inner)
         self.out_proj = nn.Linear(d_inner, d_model)
         # (len, B, d_inner) -> (len, B, n_heads, d_qkv)
-        self.reshape_for_attn = lambda x: x.reshape(*x.shape[:-1], n_heads, d_qkv)
+        self.reshape_for_attn = lambda x: x.reshape(*x.shape[:-1], n_heads, d_qkv).contiguous()
         # (len, B, n_heads, d_qkv) -> (len, B, d_inner)
-        self.recover_from_attn = lambda x: x.reshape(*x.shape[:-2], d_inner)
+        self.recover_from_attn = lambda x: x.reshape(*x.shape[:-2], d_inner).contiguous()
         self.dropout = nn.Dropout(dropout)
         self.n_heads = n_heads
         self.disable_inc() # Incremental decoding is disabled by default
@@ -156,24 +168,24 @@ class MultiheadAttention(nn.Module):
         Output
         ----------
         out
-            Shape (S, B, d_model)
+            Shape (L, B, d_model)
         attn
             None or Shape (B, n_heads, L, S)
         """
         if self.incremental_decoding: 
-            # sanity check
+            # Sanity check
             assert hasattr(self, 'K') and hasattr(self, 'V')
             assert attn_mask is None # automatically causal
             return self.inc_decode(query, key, value, need_weights=need_weights)
-        # in-sample projection
+        # In-sample projection
         Q, K, V = (
             self.reshape_for_attn(self.Q_proj(query)), 
             self.reshape_for_attn(self.K_proj(key)), 
             self.reshape_for_attn(self.V_proj(value))
         )
-        # attention mechanism
+        # Attention mechanism
         out, attn = self.multihead_attention(Q, K, V, attn_mask=attn_mask)
-        # output layer
+        # Output layer
         out = self.out_proj(out)
         return out, attn if need_weights else None
 
@@ -234,6 +246,7 @@ class EncoderLayer(nn.Module):
         self.self_attn = self_attn
         self.norm1 = nn.LayerNorm(d_model)
         self.ffn = FFN(d_model, d_ff, dropout)
+        self.norm2 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
 
@@ -248,7 +261,7 @@ class EncoderLayer(nn.Module):
 
         Output
         ----------
-        out
+        x
             Shape (B, len_enc, d_model)
         (self_attn_weight, None)
             Shape (B, ln_heads, en_enc, len_enc)
@@ -264,7 +277,8 @@ class EncoderLayer(nn.Module):
         # FFN
         x = x.transpose(0, 1)
         out = self.ffn(x)
-        return out, (self_attn_weight, None)
+        x = self.norm2(x + self.dropout(out))
+        return x, (self_attn_weight, None)
 
 
 class DecoderLayer(nn.Module): 
@@ -275,6 +289,7 @@ class DecoderLayer(nn.Module):
         self.cross_attn = cross_attn
         self.norm2 = nn.LayerNorm(d_model)
         self.ffn = FFN(d_model, d_ff, dropout)
+        self.norm3 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
 
@@ -293,7 +308,7 @@ class DecoderLayer(nn.Module):
 
         Output
         ----------
-        out
+        x
             Shape (B, len_label+len_pred, d_model)
         (self_attn_weight, cross_attn_weight)
             self_attn_weight is of Shape (B, n_heads, len_label+len_pred, len_label+len_pred)
@@ -318,13 +333,250 @@ class DecoderLayer(nn.Module):
         # FFN
         x = x.transpose(0, 1)
         out = self.ffn(x)
-        return out, (self_attn_weight, cross_attn_weight)
+        x = self.norm3(x + self.dropout(out))
+        return x, (self_attn_weight, cross_attn_weight)
 
 
-def get_triangular_causal_mask(x): 
-    # x: Shape (B, len_seq, d_model)
-    device = x.device
-    len_seq = x.shape[1]
-    return torch.triu(
-        torch.ones((1, 1, len_seq, len_seq)), diagonal=1
-    ).to(device, dtype=torch.bool)
+class SeriesDecomposition(nn.Module): 
+    def __init__(self, len_window): 
+        super().__init__()
+        self.avgpool = nn.AvgPool1d(
+            kernel_size=len_window, 
+            stride=1, 
+            padding=(len_window - 1) // 2
+        )
+
+    def forward(self, x): 
+        """
+        Input
+        ----------
+        x
+            Shape (B, len, d)
+        
+        Output
+        ----------
+        x_s
+            Seasonality, Shape (B, len, d)
+        x_t
+            Trend, Shape (B, len, d)
+        """
+        x_t = self.avgpool(x.transpose(-1, -2)).transpose(-1, -2)
+        x_s = x - x_t
+        return x_s, x_t
+
+
+class MultiheadAutoCorrelation(nn.Module): 
+    def __init__(self, d_model, n_heads=8, dropout=0.1, c_sampling=1): 
+        super().__init__()
+        assert d_model % n_heads == 0
+        d_qkv = d_model // n_heads
+        d_inner = d_qkv * n_heads
+        self.Q_proj = nn.Linear(d_model, d_inner)
+        self.K_proj = nn.Linear(d_model, d_inner)
+        self.V_proj = nn.Linear(d_model, d_inner)
+        self.out_proj = nn.Linear(d_inner, d_model)
+        # (len, B, d_inner) -> (B, n_heads, d_qkv, len)
+        self.reshape_for_attn = lambda x: x.reshape(*x.shape[:-1], n_heads, d_qkv).permute(1, 2, 3, 0).contiguous()
+        # (B, n_heads, d_qkv, len) -> (len, B, d_inner)
+        self.recover_from_attn = lambda x: x.permute(3, 0, 1, 2).reshape(x.shape[3], x.shape[0], d_inner).contiguous()
+        self.dropout = nn.Dropout(dropout)
+        self.n_heads = n_heads
+        self.c_sampling = c_sampling
+
+    def time_delay_agg(self, V, corr_scores): 
+        """
+        Input
+        ----------
+        V
+            Shape (B, n_heads, d_qkv, S)
+        corr_scores
+            Shape (B, n_heads, d_qkv, S)
+
+        Output
+        ----------
+        agg_out
+            Shape (B, n_heads, d_qkv, S)
+        """
+        B, H, E, S = V.shape
+        index = torch.arange(S).reshape(1, 1, 1, S, 1).to(V.device) # (B, n_heads, d_qkv, S, topk)
+        # Find topk
+        topk = int(self.c_sampling * math.log(S))
+        corr_scores, taus = torch.topk(torch.mean(corr_scores, dim=-2), topk, dim=-1) # Shape (B, n_heads, topk)
+        corr_weights = torch.softmax(corr_scores, dim=-1)
+        # Aggregation
+        delayed_index = (index + taus.reshape(B, H, 1, 1, topk)) % S # (B, n_heads, d_qkv, S, topk)
+        delayed_index = delayed_index.expand(B, H, E, S, topk)
+        V = V.unsqueeze(-1).expand(B, H, E, S, topk)
+        delayed_out = torch.gather(V, dim=-2, index=delayed_index)
+        agg_out = torch.mean(delayed_out * corr_weights.reshape(B, H, 1, 1, topk), dim=-1)
+        return agg_out
+
+    def multihead_autocorrelation(self, Q, K, V): 
+        L, S = Q.shape[-1], V.shape[-1]
+        if L > S: 
+            zeros = torch.zeros_like(Q[..., :(L - S)])
+            V = torch.cat([V, zeros], dim=-1)
+            K = torch.cat([K, zeros], dim=-1)
+        else: 
+            V = V[..., :L]
+            K = K[..., :L]
+        # Period-based dependencies
+        Q_fft = torch.fft.rfft(Q, dim=-1)
+        K_fft = torch.fft.rfft(K, dim=-1)
+        res = Q_fft * torch.conj(K_fft)
+        corr_scores = torch.fft.irfft(res, dim=-1)
+        # Time delay aggregation
+        out = self.time_delay_agg(V, corr_scores) 
+        out = self.recover_from_attn(out)
+        corr_scores = corr_scores.permute(0, 3, 1, 2)
+        return out, corr_scores
+
+    def forward(self, query, key, value, need_weights=False, attn_mask=None): 
+        """
+        Input
+        ----------
+        query
+            Shape (L, B, d_model)
+        key
+            Shape (S, B, d_model)
+        value
+            Shape (S, B, d_model)
+        attn_mask
+            None by assumption
+
+        Output
+        ----------
+        out
+            Shape (L, B, d_model)
+        corr
+            None or Shape (B, n_heads, L, S)
+        """
+        assert attn_mask is None
+        # In-sample projection
+        Q, K, V = (
+            self.reshape_for_attn(self.Q_proj(query)), 
+            self.reshape_for_attn(self.K_proj(key)), 
+            self.reshape_for_attn(self.V_proj(value))
+        )
+        # Autocorrelation mechanism
+        out, corr = self.multihead_autocorrelation(Q, K, V)
+        # Output layer
+        out = self.out_proj(out)
+        return out, corr if need_weights else None
+
+
+class AutoformerEncoderLayer(nn.Module): 
+    def __init__(self, self_attn, d_model, d_ff, len_window=25, dropout=0.1, output_attn=False): 
+        super().__init__()
+        self.self_attn = self_attn
+        self.decomp1 = SeriesDecomposition(len_window)
+        self.ffn = FFN(d_model, d_ff, dropout)
+        self.decomp2 = SeriesDecomposition(len_window)
+        self.dropout = nn.Dropout(dropout)
+        self.output_attn = output_attn
+
+    def forward(self, x, self_attn_mask=None): 
+        """
+        Input
+        ----------
+        x
+            Shape (B, len_enc, d_model)
+        self_attn_mask
+            None or Shape (len_enc, len_enc)
+
+        Output
+        ----------
+        x
+            Shape (B, len_enc, d_model)
+        (self_attn_weight, None)
+            Shape (B, ln_heads, en_enc, len_enc)
+        """
+        # Self-attention
+        x = x.transpose(0, 1)
+        out, self_attn_weight = self.self_attn(
+            x, x, x, 
+            need_weights=self.output_attn, 
+            attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
+        )
+        # Decomposition
+        x, _ = self.decomp1(x + self.dropout(out))
+        # FFN
+        out = self.ffn(x)
+        # Decomposition
+        x, _ = self.decomp2(x + self.dropout(out))
+        # Output
+        x = x.transpose(0, 1)
+        return x, (self_attn_weight, None)
+
+
+class AutoformerDecoderLayer(nn.Module): 
+    def __init__(self, self_attn, cross_attn, d_model, d_ff, d_dec_out, len_window=25, dropout=0.1, output_attn=False): 
+        super().__init__()
+        self.self_attn = self_attn
+        self.decomp1 = SeriesDecomposition(len_window)
+        self.cross_attn = cross_attn
+        self.decomp2 = SeriesDecomposition(len_window)
+        self.ffn = FFN(d_model, d_ff, dropout)
+        self.decomp3 = SeriesDecomposition(len_window)
+        self.dropout = nn.Dropout(dropout)
+        self.out_proj = nn.Conv1d(
+            in_channels=d_model, 
+            out_channels=d_dec_out, 
+            kernel_size=3, 
+            stride=1, 
+            padding=1, 
+            padding_mode='circular', 
+            bias=False
+        )
+        self.output_attn = output_attn
+
+    def forward(self, x, enc_out, self_attn_mask=None, cross_attn_mask=None): 
+        """
+        Input
+        ----------
+        x
+            Shape (B, len_label+len_pred, d_model)
+        enc_out
+            Shape (B, len_enc, d_model)
+        self_attn_mask
+            None or Shape (len_label+len_pred, len_label+len_pred)
+        cross_attn_mask
+            None or Shape (len_label+len_pred, len_enc)
+
+        Output
+        ----------
+        x
+            Shape (B, len_label+len_pred, d_model)
+        trend
+            Shape (B, len_label+len_pred, d_dec_out)
+        (self_attn_weight, cross_attn_weight)
+            self_attn_weight is of Shape (B, n_heads, len_label+len_pred, len_label+len_pred)
+            cross_attn_weight is of Shape (B, n_heads, len_label+len_pred, len_enc)
+        """
+        # Self-attention
+        x = x.transpose(0, 1)
+        out, self_attn_weight = self.self_attn(
+            x, x, x, 
+            need_weights=self.output_attn, 
+            attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
+        )
+        # Decomposition
+        x, trend1 = self.decomp1(x + self.dropout(out))
+        # Cross-attention
+        enc_out = enc_out.transpose(0, 1)
+        out, cross_attn_weight = self.cross_attn(
+            x, enc_out, enc_out, 
+            need_weights=self.output_attn, 
+            attn_mask=None if cross_attn_mask is None else cross_attn_mask.squeeze()
+        )
+        # Decomposition
+        x, trend2 = self.decomp2(x + self.dropout(out))
+        # FFN
+        out = self.ffn(x)
+        # Decomposition
+        x, trend3 = self.decomp3(x + self.dropout(out))
+        # Output
+        x = x.transpose(0, 1)
+        trend = (trend1 + trend2 + trend3).permute(1, 2, 0)
+        trend = self.out_proj(trend).transpose(-1, -2) # (B, len, d_dec_out)
+        return (x, trend), (self_attn_weight, cross_attn_weight)

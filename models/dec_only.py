@@ -22,7 +22,7 @@ class DecoderOnly(nn.Module):
         output_attn=False, 
     ): 
         super().__init__()
-        self.dec_embedding = DataEmbedding(d_dec_in, d_model, freq, dropout)
+        self.dec_embedding = DataEmbedding(d_dec_in, d_model, freq=freq, dropout=dropout)
         self.decoder = nn.ModuleList([
             # EncoderLayer is used here because no cross attention is performed
             EncoderLayer(

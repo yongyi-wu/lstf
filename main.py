@@ -5,7 +5,7 @@ import os
 
 import torch
 
-from models import EncoderDecoderEstimator, DecoderOnlyEstimator, AutoregressionEstimator
+from models import EncoderDecoderEstimator, DecoderOnlyEstimator, AutoregressionEstimator, AutoformerEstimator
 
 
 def parse_args(): 
@@ -23,7 +23,7 @@ def parse_args():
     task.add_argument('--len_pred', type=int, help='One-path prediction length of the decoder')
 
     model = parser.add_argument_group('Model')
-    model.add_argument('--model', type=str, choices=['enc-dec', 'dec', 'auto'], help='Architecture name')
+    model.add_argument('--model', type=str, choices=['enc-dec', 'dec', 'auto', 'autoformer'], help='Architecture name')
     model.add_argument('--d_enc_in', type=int, help='Dimension of encoder input')
     model.add_argument('--d_dec_in', type=int, help='Dimension of decoder input')
     model.add_argument('--d_dec_out', type=int, help='Dimension of decoder output')
@@ -32,6 +32,8 @@ def parse_args():
     model.add_argument('--n_heads', type=int, default=8, help='Number of heads')
     model.add_argument('--n_enc_layers', type=int, default=2, help='Number of encoder layers')
     model.add_argument('--n_dec_layers', type=int, default=1, help='Number of decoder layers')
+    model.add_argument('--len_window', type=int, default=25, help='Sliding window size for series decomposition')
+    model.add_argument('--c_sampling', type=int, default=3, help='Constant sampling factor for attention blocks')
 
     training = parser.add_argument_group('Training')
     training.add_argument('--dropout', type=float, default=0.05, help='dropout')
@@ -45,9 +47,9 @@ def parse_args():
     training.add_argument('--devices', type=int, default=[0], nargs='*',help='GPU device id(s); if not provided, use CPU instead')
 
     args = parser.parse_args()
-    args.config = '{}_{}_tf{}_f{}_le{}_ll{}_lp{}_m{}_ein{}_din{}_dout{}_dm{}_dff{}_nh{}_ne{}_nd{}_dr{}_E{}_B{}_p{}_lr{}_sch{}'.format(
+    args.config = '{}_{}_tf{}_f{}_le{}_ll{}_lp{}_m{}_ein{}_din{}_dout{}_dm{}_dff{}_nh{}_ne{}_nd{}_lw{}_c{}_dr{}_E{}_B{}_p{}_lr{}_sch{}'.format(
         args.desc.upper(), os.path.basename(args.data_path), args.task, args.freq, args.len_enc, args.len_label, args.len_pred, 
-        args.model, args.d_enc_in, args.d_dec_in, args.d_dec_out, args.d_model, args.d_ff, args.n_heads, args.n_enc_layers, args.n_dec_layers, 
+        args.model, args.d_enc_in, args.d_dec_in, args.d_dec_out, args.d_model, args.d_ff, args.n_heads, args.n_enc_layers, args.n_dec_layers, args.len_window, args.c_sampling, 
         args.dropout, args.n_epochs, args.batch_size, args.patience, args.lr, int(args.lr_schedule)
     )
     return args
@@ -63,6 +65,8 @@ def main():
         Estimator = DecoderOnlyEstimator
     elif cfg.model == 'auto': 
         Estimator = AutoregressionEstimator
+    elif cfg.model == 'autoformer': 
+        Estimator = AutoformerEstimator
     else: 
         raise KeyError(cfg.model)
 
