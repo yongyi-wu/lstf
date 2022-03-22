@@ -8,12 +8,23 @@ import torch.nn.functional as F
 
 
 def get_triangular_causal_mask(x): 
-    # x: Shape (B, len_seq, d_model)
+    """
+    Input
+    ----------
+    x
+        Shape (B, len, d)
+
+    Output
+    ----------
+    mask
+        Shape (1, 1, len, len) with upper triangle filled with True
+    """
     device = x.device
     len_seq = x.shape[1]
-    return torch.triu(
+    mask = torch.triu(
         torch.ones((1, 1, len_seq, len_seq)), diagonal=1
     ).to(device, dtype=torch.bool)
+    return mask
 
 
 class PositionalEmbedding(nn.Module): 
@@ -40,7 +51,7 @@ class PositionalEmbedding(nn.Module):
 
 
 class TokenEmbedding(nn.Module): 
-    def __init__(self, c_in, d_model): 
+    def __init__(self, c_in, d_model, bias=True): 
         super().__init__()
         padding = 1 if torch.__version__>='1.5.0' else 2
         self.tokenConv = nn.Conv1d(
@@ -48,7 +59,8 @@ class TokenEmbedding(nn.Module):
             out_channels=d_model, 
             kernel_size=3, 
             padding=padding, 
-            padding_mode='circular'
+            padding_mode='circular', 
+            bias=bias
         )
         for m in self.modules(): 
             if isinstance(m, nn.Conv1d): 
@@ -62,41 +74,42 @@ class TokenEmbedding(nn.Module):
 
 
 class TemporalEmbedding(nn.Module): 
-    def __init__(self, d_model, freq='h'): 
+    def __init__(self, d_model, bias=True, freq='h'): 
         super().__init__()
         freq_map = {'h':4, 't':5, 's':6, 'm':1, 'a':1, 'w':2, 'd':3, 'b':3}
         d_inp = freq_map[freq]
-        self.embed = nn.Linear(d_inp, d_model)
+        self.embed = nn.Linear(d_inp, d_model, bias=bias)
     
     def forward(self, x): 
         return self.embed(x)
 
 
 class DataEmbedding(nn.Module): 
-    def __init__(self, c_in, d_model, pos=True, freq='h', dropout=0.1): 
+    def __init__(self, c_in, d_model, pos=True, bias=True, freq='h', dropout=0.1): 
         super().__init__()
-        self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
+        self.value_embedding = TokenEmbedding(c_in, d_model, bias=bias)
         self.pos = pos
         if self.pos: 
-            self.position_embedding = PositionalEmbedding(d_model=d_model)
-        self.temporal_embedding = TemporalEmbedding(d_model=d_model, freq=freq)
-
+            self.position_embedding = PositionalEmbedding(d_model)
+        else: 
+            self.position_embedding = None
+        self.temporal_embedding = TemporalEmbedding(d_model, bias=bias, freq=freq)
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark): 
         x = (
             self.value_embedding(x) + \
-            self.position_embedding(x) if self.pos else 0 + \
+            (self.position_embedding(x) if self.pos else 0) + \
             self.temporal_embedding(x_mark)
         )
         return self.dropout(x)
 
 
 class FFN(nn.Module): 
-    def __init__(self, d_model, d_ff, dropout=0.1): 
+    def __init__(self, d_model, d_ff, bias=True, dropout=0.1): 
         super().__init__()
-        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
-        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
+        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1, bias=bias)
+        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1, bias=bias)
         self.dropout = nn.Dropout(dropout)
         self.activation = F.gelu
 
@@ -264,7 +277,7 @@ class EncoderLayer(nn.Module):
         x
             Shape (B, len_enc, d_model)
         (self_attn_weight, None)
-            Shape (B, ln_heads, en_enc, len_enc)
+            Shape (B, n_heads, len_enc, len_enc)
         """
         # Self-attention
         x = x.transpose(0, 1)
@@ -343,7 +356,8 @@ class SeriesDecomposition(nn.Module):
         self.avgpool = nn.AvgPool1d(
             kernel_size=len_window, 
             stride=1, 
-            padding=(len_window - 1) // 2
+            padding=(len_window - 1) // 2, 
+            count_include_pad=False
         )
 
     def forward(self, x): 
@@ -366,7 +380,7 @@ class SeriesDecomposition(nn.Module):
 
 
 class MultiheadAutoCorrelation(nn.Module): 
-    def __init__(self, d_model, n_heads=8, dropout=0.1, c_sampling=1): 
+    def __init__(self, d_model, n_heads=8, c_sampling=1): 
         super().__init__()
         assert d_model % n_heads == 0
         d_qkv = d_model // n_heads
@@ -379,7 +393,6 @@ class MultiheadAutoCorrelation(nn.Module):
         self.reshape_for_attn = lambda x: x.reshape(*x.shape[:-1], n_heads, d_qkv).permute(1, 2, 3, 0).contiguous()
         # (B, n_heads, d_qkv, len) -> (len, B, d_inner)
         self.recover_from_attn = lambda x: x.permute(3, 0, 1, 2).reshape(x.shape[3], x.shape[0], d_inner).contiguous()
-        self.dropout = nn.Dropout(dropout)
         self.n_heads = n_heads
         self.c_sampling = c_sampling
 
@@ -402,16 +415,17 @@ class MultiheadAutoCorrelation(nn.Module):
         # Find topk
         topk = int(self.c_sampling * math.log(S))
         corr_scores, taus = torch.topk(torch.mean(corr_scores, dim=-2), topk, dim=-1) # Shape (B, n_heads, topk)
-        corr_weights = torch.softmax(corr_scores, dim=-1)
+        corr_weights = torch.softmax(corr_scores, dim=-1).reshape(B, H, 1, 1, topk)
         # Aggregation
-        delayed_index = (index + taus.reshape(B, H, 1, 1, topk)) % S # (B, n_heads, d_qkv, S, topk)
+        delayed_index = (index + taus.reshape(B, H, 1, 1, topk)) % S
         delayed_index = delayed_index.expand(B, H, E, S, topk)
         V = V.unsqueeze(-1).expand(B, H, E, S, topk)
         delayed_out = torch.gather(V, dim=-2, index=delayed_index)
-        agg_out = torch.mean(delayed_out * corr_weights.reshape(B, H, 1, 1, topk), dim=-1)
+        agg_out = torch.mean(delayed_out * corr_weights, dim=-1)
         return agg_out
 
     def multihead_autocorrelation(self, Q, K, V): 
+        # Padding or truncation of length
         L, S = Q.shape[-1], V.shape[-1]
         if L > S: 
             zeros = torch.zeros_like(Q[..., :(L - S)])
@@ -428,7 +442,6 @@ class MultiheadAutoCorrelation(nn.Module):
         # Time delay aggregation
         out = self.time_delay_agg(V, corr_scores) 
         out = self.recover_from_attn(out)
-        corr_scores = corr_scores.permute(0, 3, 1, 2)
         return out, corr_scores
 
     def forward(self, query, key, value, need_weights=False, attn_mask=None): 
@@ -449,7 +462,7 @@ class MultiheadAutoCorrelation(nn.Module):
         out
             Shape (L, B, d_model)
         corr
-            None or Shape (B, n_heads, L, S)
+            None or Shape (B, n_heads, d_qkv, L)
         """
         assert attn_mask is None
         # In-sample projection
@@ -470,7 +483,7 @@ class AutoformerEncoderLayer(nn.Module):
         super().__init__()
         self.self_attn = self_attn
         self.decomp1 = SeriesDecomposition(len_window)
-        self.ffn = FFN(d_model, d_ff, dropout)
+        self.ffn = FFN(d_model, d_ff, bias=False, dropout=dropout)
         self.decomp2 = SeriesDecomposition(len_window)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
@@ -499,13 +512,11 @@ class AutoformerEncoderLayer(nn.Module):
             attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
         )
         # Decomposition
-        x, _ = self.decomp1(x + self.dropout(out))
+        x, _ = self.decomp1((x + self.dropout(out)).transpose(0, 1))
         # FFN
         out = self.ffn(x)
         # Decomposition
         x, _ = self.decomp2(x + self.dropout(out))
-        # Output
-        x = x.transpose(0, 1)
         return x, (self_attn_weight, None)
 
 
@@ -516,7 +527,7 @@ class AutoformerDecoderLayer(nn.Module):
         self.decomp1 = SeriesDecomposition(len_window)
         self.cross_attn = cross_attn
         self.decomp2 = SeriesDecomposition(len_window)
-        self.ffn = FFN(d_model, d_ff, dropout)
+        self.ffn = FFN(d_model, d_ff, bias=False, dropout=dropout)
         self.decomp3 = SeriesDecomposition(len_window)
         self.dropout = nn.Dropout(dropout)
         self.out_proj = nn.Conv1d(
@@ -561,8 +572,9 @@ class AutoformerDecoderLayer(nn.Module):
             attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
         )
         # Decomposition
-        x, trend1 = self.decomp1(x + self.dropout(out))
+        x, trend1 = self.decomp1((x + self.dropout(out)).transpose(0, 1))
         # Cross-attention
+        x = x.transpose(0, 1)
         enc_out = enc_out.transpose(0, 1)
         out, cross_attn_weight = self.cross_attn(
             x, enc_out, enc_out, 
@@ -570,13 +582,13 @@ class AutoformerDecoderLayer(nn.Module):
             attn_mask=None if cross_attn_mask is None else cross_attn_mask.squeeze()
         )
         # Decomposition
-        x, trend2 = self.decomp2(x + self.dropout(out))
+        x, trend2 = self.decomp2((x + self.dropout(out)).transpose(0, 1))
         # FFN
         out = self.ffn(x)
         # Decomposition
         x, trend3 = self.decomp3(x + self.dropout(out))
         # Output
-        x = x.transpose(0, 1)
-        trend = (trend1 + trend2 + trend3).permute(1, 2, 0)
-        trend = self.out_proj(trend).transpose(-1, -2) # (B, len, d_dec_out)
+        trend = self.out_proj(
+            (trend1 + trend2 + trend3).transpose(-1, -2)
+        ).transpose(-1, -2)
         return (x, trend), (self_attn_weight, cross_attn_weight)

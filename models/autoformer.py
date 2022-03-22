@@ -25,11 +25,13 @@ class Autoformer(nn.Module):
         output_attn=False, 
     ): 
         super().__init__()
-        self.enc_embedding = DataEmbedding(d_enc_in, d_model, pos=False, freq=freq, dropout=dropout)
-        self.dec_embedding = DataEmbedding(d_dec_in, d_model, pos=False, freq=freq, dropout=dropout)
+        # Embedding
+        self.enc_embedding = DataEmbedding(d_enc_in, d_model, pos=False, bias=False, freq=freq, dropout=dropout)
+        self.dec_embedding = DataEmbedding(d_dec_in, d_model, pos=False, bias=False, freq=freq, dropout=dropout)
+        # Encoder
         self.encoder = nn.ModuleList([
             AutoformerEncoderLayer(
-                MultiheadAutoCorrelation(d_model, n_heads=n_heads, dropout=dropout, c_sampling=c_sampling), 
+                MultiheadAutoCorrelation(d_model, n_heads=n_heads, c_sampling=c_sampling), 
                 d_model, 
                 d_ff, 
                 len_window=len_window, 
@@ -37,12 +39,14 @@ class Autoformer(nn.Module):
                 output_attn=output_attn
             ) for _ in range(n_enc_layers)
         ])
-        self.enc_norm = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.enc_norm = nn.LayerNorm(d_model)
+        self.enc_norm.bias.requires_grad = False
+        # Decoder
         self.decomp = SeriesDecomposition(len_window)
         self.decoder = nn.ModuleList([
             AutoformerDecoderLayer(
-                MultiheadAutoCorrelation(d_model, n_heads=n_heads, dropout=dropout, c_sampling=c_sampling), 
-                MultiheadAutoCorrelation(d_model, n_heads=n_heads, dropout=dropout, c_sampling=c_sampling), 
+                MultiheadAutoCorrelation(d_model, n_heads=n_heads, c_sampling=c_sampling), 
+                MultiheadAutoCorrelation(d_model, n_heads=n_heads, c_sampling=c_sampling), 
                 d_model, 
                 d_ff, 
                 d_dec_out, 
@@ -51,7 +55,9 @@ class Autoformer(nn.Module):
                 output_attn=output_attn
             ) for _ in range(n_dec_layers)
         ])
-        self.dec_norm = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.dec_norm = nn.LayerNorm(d_model)
+        self.dec_norm.bias.requires_grad = False
+        # Output
         self.out_proj = nn.Linear(d_model, d_dec_out)
 
     def encode(self, enc_in, self_attn_mask=None): 

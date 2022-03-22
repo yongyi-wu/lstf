@@ -203,8 +203,8 @@ class ETTDataset(BaseDataset):
         # Retrieve appropriate index
         borders = ETTDataset.borders_h if m[1] == 'h' else ETTDataset.borders_m
         train_start, train_end = borders[0], borders[1]
-        dev_start, dev_end = borders[1] - self.len_label, borders[2]
-        test_start, test_end = borders[2] - self.len_label, borders[3]
+        dev_start, dev_end = borders[1] - self.len_enc, borders[2]
+        test_start, test_end = borders[2] - self.len_enc, borders[3]
         if self.mode == 'train': 
             start, end = train_start, train_end
         elif self.mode == 'dev': 
@@ -243,8 +243,8 @@ class OtherDataset(BaseDataset):
             n_test = n_dev = (n_test + n_dev) // 2
         borders = [0, n_train, n_train + n_dev, len(df)]
         train_start, train_end = borders[0], borders[1]
-        dev_start, dev_end = borders[1] - self.len_label, borders[2]
-        test_start, test_end = borders[2] - self.len_label, borders[3]
+        dev_start, dev_end = borders[1] - self.len_enc, borders[2]
+        test_start, test_end = borders[2] - self.len_enc, borders[3]
 
         if self.mode == 'train': 
             start, end = train_start, train_end
