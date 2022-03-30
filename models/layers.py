@@ -490,10 +490,7 @@ class AutoformerEncoderLayer(nn.Module):
         else: 
             self.norm1 = nn.LayerNorm(d_model)
             self.norm2 = nn.LayerNorm(d_model)
-            if isinstance(self_attn, MultiheadAutoCorrelation): 
-                self.norm1.bias.requires_grad = False
-                self.norm2.bias.requires_grad = False
-        self.ffn = FFN(d_model, d_ff, bias=False, dropout=dropout)
+        self.ffn = FFN(d_model, d_ff, bias=not self.decomp, dropout=dropout)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
 
@@ -563,14 +560,7 @@ class AutoformerDecoderLayer(nn.Module):
             self.norm1 = nn.LayerNorm(d_model)
             self.norm2 = nn.LayerNorm(d_model)
             self.norm3 = nn.LayerNorm(d_model)
-            if (
-                isinstance(self_attn, MultiheadAutoCorrelation) and 
-                isinstance(cross_attn, MultiheadAutoCorrelation)
-            ): 
-                self.norm1.bias.requires_grad = False
-                self.norm2.bias.requires_grad = False
-                self.norm3.bias.requires_grad = False
-        self.ffn = FFN(d_model, d_ff, bias=False, dropout=dropout)
+        self.ffn = FFN(d_model, d_ff, bias=not self.decomp, dropout=dropout)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
 

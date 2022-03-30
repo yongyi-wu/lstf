@@ -32,6 +32,7 @@ class Autoformer(nn.Module):
         # Embedding
         self.enc_embedding = DataEmbedding(d_enc_in, d_model, pos=False, temp=temp, freq=freq, bias=False, dropout=dropout)
         self.dec_embedding = DataEmbedding(d_dec_in, d_model, pos=False, temp=temp, freq=freq, bias=False, dropout=dropout)
+        self.decomp = SeriesDecomposition(len_window) if len_window > 0 else None
         Attn = MultiheadAutoCorrelation if attn == 'autocorrelation' else MultiheadAttention
         # Encoder
         self.encoder = nn.ModuleList([
@@ -45,10 +46,9 @@ class Autoformer(nn.Module):
             ) for _ in range(n_enc_layers)
         ])
         self.enc_norm = nn.LayerNorm(d_model)
-        if isinstance(Attn, MultiheadAutoCorrelation): 
+        if self.decomp is not None: 
             self.enc_norm.bias.requires_grad = False
         # Decoder
-        self.decomp = SeriesDecomposition(len_window) if len_window > 0 else None
         self.decoder = nn.ModuleList([
             AutoformerDecoderLayer(
                 Attn(d_model, n_heads=n_heads, c_sampling=c_sampling), 
@@ -62,7 +62,7 @@ class Autoformer(nn.Module):
             ) for _ in range(n_dec_layers)
         ])
         self.dec_norm = nn.LayerNorm(d_model)
-        if isinstance(Attn, MultiheadAutoCorrelation): 
+        if self.decomp is not None: 
             self.dec_norm.bias.requires_grad = False
         # Output
         self.out_proj = nn.Linear(d_model, d_dec_out)
