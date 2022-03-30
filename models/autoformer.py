@@ -150,6 +150,7 @@ class Autoformer(nn.Module):
 
 class AutoformerEstimator(BaseEstimator): 
     def get_model(self): 
+        assert self.cfg.len_window == 0 or self.cfg.len_window % 2 == 1
         return Autoformer(
             self.cfg.d_enc_in, 
             self.cfg.d_dec_in, 

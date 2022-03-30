@@ -16,7 +16,7 @@ def parse_args():
     task.add_argument('--data', type=str, choices=['ETTm2', 'Electricity', 'Exchange', 'Traffic', 'Weather', 'ILI', 'Synthetic'], help='Name of a supported dataset')
     task.add_argument('--data_path', type=str, help='Path to the dataset')
     task.add_argument('--task', type=str, default='M', choices=['U', 'M'], help='Univariate or multivariate forecasting')
-    task.add_argument('--ckpt', type=str, default='/usr2/home/yongyiw/ckpt/ltsf/', help='Location to store model checkpoints')
+    task.add_argument('--ckpt', type=str, default='/usr2/home/yongyiw/ckpt/lstf/', help='Location to store model checkpoints')
     task.add_argument('--freq', type=str, default='h', help='Sampling rate duing the time feature extraction')
     task.add_argument('--len_enc', type=int, help='Input sequence length to the encoder')
     task.add_argument('--len_label', type=int, help='Prepended length of the decoder')
