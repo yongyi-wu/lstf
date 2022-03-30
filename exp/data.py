@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import os
 import re
 
 import numpy as np
@@ -226,6 +227,7 @@ class ETTDataset(BaseDataset):
 
 class OtherDataset(BaseDataset): 
     def _read_data(self, data_path): 
+        # Read dataset
         df = pd.read_csv(data_path)
         assert 'date' in df.columns
         cols = list(df.columns)
@@ -245,7 +247,6 @@ class OtherDataset(BaseDataset):
         train_start, train_end = borders[0], borders[1]
         dev_start, dev_end = borders[1] - self.len_enc, borders[2]
         test_start, test_end = borders[2] - self.len_enc, borders[3]
-
         if self.mode == 'train': 
             start, end = train_start, train_end
         elif self.mode == 'dev': 
@@ -263,3 +264,33 @@ class OtherDataset(BaseDataset):
         time['date'] = pd.to_datetime(time['date'])
         # NOTE: Always use timeenc = 1 and freq = 'h'
         self.time = get_temporal_features(time, timeenc=1, freq='h')
+
+
+class SyntheticDataset(BaseDataset): 
+    def _read_data(self, data_path): 
+        # Read dataset
+        assert os.path.basename(data_path).endswith('.npy')
+        data = np.load(data_path, allow_pickle=True)
+
+        # Retrieve appropriate index
+        n_train = int(len(data) * 0.7)
+        n_test = int(len(data) * 0.2)
+        n_dev = len(data) - n_train - n_test
+        borders = [0, n_train, n_train + n_dev, len(data)]
+        train_start, train_end = borders[0], borders[1]
+        dev_start, dev_end = borders[1] - self.len_enc, borders[2]
+        test_start, test_end = borders[2] - self.len_enc, borders[3]
+        if self.mode == 'train': 
+            start, end = train_start, train_end
+        elif self.mode == 'dev': 
+            start, end = dev_start, dev_end
+        elif self.mode == 'test': 
+            start, end = test_start, test_end
+
+        # Scale the data based on the training dataset
+        self._scaler = StandardScaler()
+        self._scaler.fit(data[train_start:train_end])
+        self.data = self._scaler.transform(data[start:end])
+
+        # No temporal features
+        self.time = np.empty((len(self.data), 0))

@@ -130,6 +130,7 @@ class AutoregressionEstimator(BaseEstimator):
             n_dec_layers=self.cfg.n_dec_layers, 
             d_ff=self.cfg.d_ff, 
             dropout=self.cfg.dropout, 
+            temp=not self.cfg.no_temporal, 
             freq=self.cfg.freq, 
             output_attn=self.cfg.output_attn
         )

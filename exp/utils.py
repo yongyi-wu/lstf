@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
-from .data import ETTDataset, OtherDataset
+from .data import ETTDataset, OtherDataset, SyntheticDataset
 
 
 def seed_everything(seed): 
@@ -69,6 +69,9 @@ class BaseEstimator(object):
     def get_data(self): 
         if re.match(r'ETT[hm]\d', self.cfg.data): 
             Data = ETTDataset
+        elif self.cfg.data == 'Synthetic': 
+            Data = SyntheticDataset
+            assert self.cfg.no_temporal
         else: 
             Data = OtherDataset
         data_path = self.cfg.data_path

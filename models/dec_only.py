@@ -18,11 +18,12 @@ class DecoderOnly(nn.Module):
         n_dec_layers=1, 
         d_ff=2048, 
         dropout=0.0, 
+        temp=True, 
         freq='h', 
         output_attn=False, 
     ): 
         super().__init__()
-        self.dec_embedding = DataEmbedding(d_dec_in, d_model, freq=freq, dropout=dropout)
+        self.dec_embedding = DataEmbedding(d_dec_in, d_model, temp=temp, freq=freq, dropout=dropout)
         self.decoder = nn.ModuleList([
             # EncoderLayer is used here because no cross attention is performed
             EncoderLayer(
@@ -87,6 +88,7 @@ class DecoderOnlyEstimator(BaseEstimator):
             n_dec_layers=self.cfg.n_dec_layers, 
             d_ff=self.cfg.d_ff, 
             dropout=self.cfg.dropout, 
+            temp=not self.cfg.no_temporal, 
             freq=self.cfg.freq, 
             output_attn=self.cfg.output_attn
         )

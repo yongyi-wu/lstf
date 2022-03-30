@@ -4,7 +4,9 @@ import torch
 from torch import nn
 
 from .layers import (
-    DataEmbedding, MultiheadAutoCorrelation, AutoformerEncoderLayer, AutoformerDecoderLayer, SeriesDecomposition
+    get_triangular_causal_mask, DataEmbedding, 
+    SeriesDecomposition, MultiheadAutoCorrelation, MultiheadAttention, 
+    AutoformerEncoderLayer, AutoformerDecoderLayer
 )
 from exp import BaseEstimator
 
@@ -13,12 +15,14 @@ class Autoformer(nn.Module):
     def __init__(
         self, 
         d_enc_in, d_dec_in, d_dec_out, 
+        attn='autocorrelation', 
         d_model=512, 
         n_heads=8, 
         n_enc_layers=2, 
         n_dec_layers=1, 
         d_ff=2048, 
         dropout=0.0, 
+        temp=True, 
         freq='h', 
         len_window=25, 
         c_sampling=1, 
@@ -26,12 +30,13 @@ class Autoformer(nn.Module):
     ): 
         super().__init__()
         # Embedding
-        self.enc_embedding = DataEmbedding(d_enc_in, d_model, pos=False, bias=False, freq=freq, dropout=dropout)
-        self.dec_embedding = DataEmbedding(d_dec_in, d_model, pos=False, bias=False, freq=freq, dropout=dropout)
+        self.enc_embedding = DataEmbedding(d_enc_in, d_model, pos=False, temp=temp, freq=freq, bias=False, dropout=dropout)
+        self.dec_embedding = DataEmbedding(d_dec_in, d_model, pos=False, temp=temp, freq=freq, bias=False, dropout=dropout)
+        Attn = MultiheadAutoCorrelation if attn == 'autocorrelation' else MultiheadAttention
         # Encoder
         self.encoder = nn.ModuleList([
             AutoformerEncoderLayer(
-                MultiheadAutoCorrelation(d_model, n_heads=n_heads, c_sampling=c_sampling), 
+                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling), 
                 d_model, 
                 d_ff, 
                 len_window=len_window, 
@@ -40,13 +45,14 @@ class Autoformer(nn.Module):
             ) for _ in range(n_enc_layers)
         ])
         self.enc_norm = nn.LayerNorm(d_model)
-        self.enc_norm.bias.requires_grad = False
+        if isinstance(Attn, MultiheadAutoCorrelation): 
+            self.enc_norm.bias.requires_grad = False
         # Decoder
-        self.decomp = SeriesDecomposition(len_window)
+        self.decomp = SeriesDecomposition(len_window) if len_window > 0 else None
         self.decoder = nn.ModuleList([
             AutoformerDecoderLayer(
-                MultiheadAutoCorrelation(d_model, n_heads=n_heads, c_sampling=c_sampling), 
-                MultiheadAutoCorrelation(d_model, n_heads=n_heads, c_sampling=c_sampling), 
+                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling), 
+                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling), 
                 d_model, 
                 d_ff, 
                 d_dec_out, 
@@ -56,7 +62,8 @@ class Autoformer(nn.Module):
             ) for _ in range(n_dec_layers)
         ])
         self.dec_norm = nn.LayerNorm(d_model)
-        self.dec_norm.bias.requires_grad = False
+        if isinstance(Attn, MultiheadAutoCorrelation): 
+            self.dec_norm.bias.requires_grad = False
         # Output
         self.out_proj = nn.Linear(d_model, d_dec_out)
 
@@ -82,7 +89,8 @@ class Autoformer(nn.Module):
                 dec_out_s, enc_out, 
                 self_attn_mask=self_attn_mask, cross_attn_mask=cross_attn_mask
             )
-            dec_out_t = dec_out_t + res_t
+            if dec_out_t is not None: 
+                dec_out_t = dec_out_t + res_t
             dec_self_weights.append(self_attn_weight)
             dec_enc_weights.append(cross_attn_weight)
         dec_out_s = self.dec_norm(dec_out_s)
@@ -103,8 +111,10 @@ class Autoformer(nn.Module):
             Shape (B, len_enc, d_enc_in)
         x_time_enc
             Shape (B, len_enc, d_temporal)
-        x_dec
+        x_dec_s
             Shape (B, len_label+len_pred, d_dec_in)
+        x_dec_t
+            None or Shape (B, len_label+len_pred, d_dec_in)
         x_time_dec
             Shape (B, len_label+len_pred, d_temporal)
         enc_self_mask
@@ -134,7 +144,7 @@ class Autoformer(nn.Module):
             self_attn_mask=dec_self_mask, cross_attn_mask=dec_enc_mask
         )
         # Output projection
-        out = self.out_proj(dec_out_s) + dec_out_t
+        out = self.out_proj(dec_out_s) + (dec_out_t if dec_out_t is not None else 0)
         return out, ((enc_self_weights, None), (dec_self_weights, dec_enc_weights))
 
 
@@ -144,12 +154,14 @@ class AutoformerEstimator(BaseEstimator):
             self.cfg.d_enc_in, 
             self.cfg.d_dec_in, 
             self.cfg.d_dec_out, 
+            attn=self.cfg.attn, 
             d_model=self.cfg.d_model, 
             n_heads=self.cfg.n_heads, 
             n_enc_layers=self.cfg.n_enc_layers, 
             n_dec_layers=self.cfg.n_dec_layers, 
             d_ff=self.cfg.d_ff, 
             dropout=self.cfg.dropout, 
+            temp=not self.cfg.no_temporal, 
             freq=self.cfg.freq, 
             len_window=self.cfg.len_window, 
             c_sampling=self.cfg.c_sampling, 
@@ -161,11 +173,16 @@ class AutoformerEstimator(BaseEstimator):
             decomp = self.model.module.decomp
         else: 
             decomp = self.model.decomp
-        x_dec_s, x_dec_t = decomp(x_enc)
-        zeros = torch.zeros((x_dec.shape[0], self.cfg.len_pred, x_dec.shape[2]), device=x_dec.device)
-        x_mean = torch.mean(x_enc, dim=1, keepdim=True).repeat(1, self.cfg.len_pred, 1)
-        x_dec_s = torch.cat((x_dec_s[:, -self.cfg.len_label:, :], zeros), dim=1)
-        x_dec_t = torch.cat((x_dec_t[:, -self.cfg.len_label:, :], x_mean), dim=1)
+        if decomp is not None: 
+            x_dec_s, x_dec_t = decomp(x_enc)
+            zeros = torch.zeros((x_dec.shape[0], self.cfg.len_pred, x_dec.shape[2]), device=x_dec.device)
+            x_mean = torch.mean(x_enc, dim=1, keepdim=True).repeat(1, self.cfg.len_pred, 1)
+            x_dec_s = torch.cat((x_dec_s[:, -self.cfg.len_label:, :], zeros), dim=1)
+            x_dec_t = torch.cat((x_dec_t[:, -self.cfg.len_label:, :], x_mean), dim=1)
+        else: 
+            zeros = torch.zeros((x_dec.shape[0], self.cfg.len_pred, x_dec.shape[2]), device=x_dec.device)
+            x_dec_s = torch.cat((x_dec[:, :self.cfg.len_label, :], zeros), dim=1)
+            x_dec_t = None
         return x_dec_s, x_dec_t
 
     def _step(self, data): 
@@ -179,7 +196,8 @@ class AutoformerEstimator(BaseEstimator):
             self.optimizer.zero_grad()
 
         yhat, _ = self.model(
-            enc_x, enc_x_time, dec_y_s, dec_y_t, dec_y_time
+            enc_x, enc_x_time, dec_y_s, dec_y_t, dec_y_time, 
+            dec_self_mask=None if self.cfg.attn == 'autocorrelation' else get_triangular_causal_mask(dec_y_s)
         )
         yhat = yhat[:, -self.cfg.len_pred:, :]
         y = y[:, -self.cfg.len_pred:, :]

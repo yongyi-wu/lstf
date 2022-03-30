@@ -85,22 +85,20 @@ class TemporalEmbedding(nn.Module):
 
 
 class DataEmbedding(nn.Module): 
-    def __init__(self, c_in, d_model, pos=True, bias=True, freq='h', dropout=0.1): 
+    def __init__(self, c_in, d_model, pos=True, temp=True, freq='h', bias=True, dropout=0.1): 
         super().__init__()
         self.value_embedding = TokenEmbedding(c_in, d_model, bias=bias)
         self.pos = pos
-        if self.pos: 
-            self.position_embedding = PositionalEmbedding(d_model)
-        else: 
-            self.position_embedding = None
-        self.temporal_embedding = TemporalEmbedding(d_model, bias=bias, freq=freq)
+        self.position_embedding = PositionalEmbedding(d_model) if self.pos else None
+        self.temp = temp
+        self.temporal_embedding = TemporalEmbedding(d_model, bias=bias, freq=freq) if self.temp else None
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, x, x_mark): 
         x = (
             self.value_embedding(x) + \
             (self.position_embedding(x) if self.pos else 0) + \
-            self.temporal_embedding(x_mark)
+            (self.temporal_embedding(x_mark) if self.temp else 0)
         )
         return self.dropout(x)
 
@@ -132,7 +130,7 @@ class FFN(nn.Module):
 
 
 class MultiheadAttention(nn.Module): 
-    def __init__(self, d_model, n_heads=8, dropout=0.1): 
+    def __init__(self, d_model, n_heads=8, dropout=0.1, **kwargs): 
         super().__init__()
         assert d_model % n_heads == 0
         d_qkv = d_model // n_heads
@@ -380,7 +378,7 @@ class SeriesDecomposition(nn.Module):
 
 
 class MultiheadAutoCorrelation(nn.Module): 
-    def __init__(self, d_model, n_heads=8, c_sampling=1): 
+    def __init__(self, d_model, n_heads=8, c_sampling=1, **kwargs): 
         super().__init__()
         assert d_model % n_heads == 0
         d_qkv = d_model // n_heads
@@ -479,12 +477,23 @@ class MultiheadAutoCorrelation(nn.Module):
 
 
 class AutoformerEncoderLayer(nn.Module): 
-    def __init__(self, self_attn, d_model, d_ff, len_window=25, dropout=0.1, output_attn=False): 
+    def __init__(
+        self, self_attn, d_model, d_ff, 
+        len_window=25, dropout=0.1, output_attn=False
+    ): 
         super().__init__()
         self.self_attn = self_attn
-        self.decomp1 = SeriesDecomposition(len_window)
+        self.decomp = (len_window > 0)
+        if self.decomp: 
+            self.decomp1 = SeriesDecomposition(len_window)
+            self.decomp2 = SeriesDecomposition(len_window)
+        else: 
+            self.norm1 = nn.LayerNorm(d_model)
+            self.norm2 = nn.LayerNorm(d_model)
+            if isinstance(self_attn, MultiheadAutoCorrelation): 
+                self.norm1.bias.requires_grad = False
+                self.norm2.bias.requires_grad = False
         self.ffn = FFN(d_model, d_ff, bias=False, dropout=dropout)
-        self.decomp2 = SeriesDecomposition(len_window)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
 
@@ -511,34 +520,58 @@ class AutoformerEncoderLayer(nn.Module):
             need_weights=self.output_attn, 
             attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
         )
-        # Decomposition
-        x, _ = self.decomp1((x + self.dropout(out)).transpose(0, 1))
+        # Decomposition / LayerNorm
+        x = (x + self.dropout(out)).transpose(0, 1)
+        if self.decomp: 
+            x, _ = self.decomp1(x)
+        else: 
+            x = self.norm1(x)
         # FFN
         out = self.ffn(x)
-        # Decomposition
-        x, _ = self.decomp2(x + self.dropout(out))
+        # Decomposition / LayerNorm
+        x = x + self.dropout(out)
+        if self.decomp: 
+            x, _ = self.decomp2(x)
+        else: 
+            x = self.norm2(x)
         return x, (self_attn_weight, None)
 
 
 class AutoformerDecoderLayer(nn.Module): 
-    def __init__(self, self_attn, cross_attn, d_model, d_ff, d_dec_out, len_window=25, dropout=0.1, output_attn=False): 
+    def __init__(
+        self, self_attn, cross_attn, d_model, d_ff, d_dec_out, 
+        len_window=25, dropout=0.1, output_attn=False
+    ): 
         super().__init__()
         self.self_attn = self_attn
-        self.decomp1 = SeriesDecomposition(len_window)
         self.cross_attn = cross_attn
-        self.decomp2 = SeriesDecomposition(len_window)
+        self.decomp = (len_window > 0)
+        if self.decomp: 
+            self.decomp1 = SeriesDecomposition(len_window)
+            self.decomp2 = SeriesDecomposition(len_window)
+            self.decomp3 = SeriesDecomposition(len_window)
+            self.out_proj = nn.Conv1d(
+                in_channels=d_model, 
+                out_channels=d_dec_out, 
+                kernel_size=3, 
+                stride=1, 
+                padding=1, 
+                padding_mode='circular', 
+                bias=False
+            )
+        else: 
+            self.norm1 = nn.LayerNorm(d_model)
+            self.norm2 = nn.LayerNorm(d_model)
+            self.norm3 = nn.LayerNorm(d_model)
+            if (
+                isinstance(self_attn, MultiheadAutoCorrelation) and 
+                isinstance(cross_attn, MultiheadAutoCorrelation)
+            ): 
+                self.norm1.bias.requires_grad = False
+                self.norm2.bias.requires_grad = False
+                self.norm3.bias.requires_grad = False
         self.ffn = FFN(d_model, d_ff, bias=False, dropout=dropout)
-        self.decomp3 = SeriesDecomposition(len_window)
         self.dropout = nn.Dropout(dropout)
-        self.out_proj = nn.Conv1d(
-            in_channels=d_model, 
-            out_channels=d_dec_out, 
-            kernel_size=3, 
-            stride=1, 
-            padding=1, 
-            padding_mode='circular', 
-            bias=False
-        )
         self.output_attn = output_attn
 
     def forward(self, x, enc_out, self_attn_mask=None, cross_attn_mask=None): 
@@ -559,7 +592,7 @@ class AutoformerDecoderLayer(nn.Module):
         x
             Shape (B, len_label+len_pred, d_model)
         trend
-            Shape (B, len_label+len_pred, d_dec_out)
+            None or Shape (B, len_label+len_pred, d_dec_out)
         (self_attn_weight, cross_attn_weight)
             self_attn_weight is of Shape (B, n_heads, len_label+len_pred, len_label+len_pred)
             cross_attn_weight is of Shape (B, n_heads, len_label+len_pred, len_enc)
@@ -571,8 +604,12 @@ class AutoformerDecoderLayer(nn.Module):
             need_weights=self.output_attn, 
             attn_mask=None if self_attn_mask is None else self_attn_mask.squeeze()
         )
-        # Decomposition
-        x, trend1 = self.decomp1((x + self.dropout(out)).transpose(0, 1))
+        # Decomposition / LayerNorm
+        x = (x + self.dropout(out)).transpose(0, 1)
+        if self.decomp: 
+            x, trend1 = self.decomp1(x)
+        else: 
+            x = self.norm1(x)
         # Cross-attention
         x = x.transpose(0, 1)
         enc_out = enc_out.transpose(0, 1)
@@ -581,14 +618,24 @@ class AutoformerDecoderLayer(nn.Module):
             need_weights=self.output_attn, 
             attn_mask=None if cross_attn_mask is None else cross_attn_mask.squeeze()
         )
-        # Decomposition
-        x, trend2 = self.decomp2((x + self.dropout(out)).transpose(0, 1))
+        # Decomposition / LayerNorm
+        x = (x + self.dropout(out)).transpose(0, 1)
+        if self.decomp: 
+            x, trend2 = self.decomp2(x)
+        else: 
+            x = self.norm2(x)
         # FFN
         out = self.ffn(x)
-        # Decomposition
-        x, trend3 = self.decomp3(x + self.dropout(out))
-        # Output
-        trend = self.out_proj(
-            (trend1 + trend2 + trend3).transpose(-1, -2)
-        ).transpose(-1, -2)
+        # Decomposition / LayerNorm
+        x = x + self.dropout(out)
+        if self.decomp: 
+            x, trend3 = self.decomp3(x)
+        else: 
+            x = self.norm3(x)
+        # Residual trend
+        if self.decomp: 
+            trend = self.out_proj((trend1 + trend2 + trend3).transpose(-1, -2))
+            trend = trend.transpose(-1, -2)
+        else: 
+            trend = None
         return (x, trend), (self_attn_weight, cross_attn_weight)
