@@ -256,7 +256,7 @@ class EncoderLayer(nn.Module):
         super().__init__()
         self.self_attn = self_attn
         self.norm1 = nn.LayerNorm(d_model)
-        self.ffn = FFN(d_model, d_ff, dropout)
+        self.ffn = FFN(d_model, d_ff, dropout=dropout)
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
@@ -299,7 +299,7 @@ class DecoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.cross_attn = cross_attn
         self.norm2 = nn.LayerNorm(d_model)
-        self.ffn = FFN(d_model, d_ff, dropout)
+        self.ffn = FFN(d_model, d_ff, dropout=dropout)
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
         self.output_attn = output_attn
@@ -363,14 +363,14 @@ class SeriesDecomposition(nn.Module):
         Input
         ----------
         x
-            Shape (B, len, d)
+            Shape (B, len, D)
         
         Output
         ----------
         x_s
-            Seasonality, Shape (B, len, d)
+            Seasonality, Shape (B, len, D)
         x_t
-            Trend, Shape (B, len, d)
+            Trend, Shape (B, len, D)
         """
         x_t = self.avgpool(x.transpose(-1, -2)).transpose(-1, -2)
         x_s = x - x_t
@@ -439,7 +439,6 @@ class MultiheadAutoCorrelation(nn.Module):
         corr_scores = torch.fft.irfft(res, dim=-1)
         # Time delay aggregation
         out = self.time_delay_agg(V, corr_scores) 
-        out = self.recover_from_attn(out)
         return out, corr_scores
 
     def forward(self, query, key, value, need_weights=False, attn_mask=None): 
@@ -471,6 +470,7 @@ class MultiheadAutoCorrelation(nn.Module):
         )
         # Autocorrelation mechanism
         out, corr = self.multihead_autocorrelation(Q, K, V)
+        out = self.recover_from_attn(out)
         # Output layer
         out = self.out_proj(out)
         return out, corr if need_weights else None

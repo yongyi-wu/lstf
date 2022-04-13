@@ -14,22 +14,22 @@ do
             nd=1
             if [ $data != ILI ]
             then
-                l_enc=96
-                l_label=48
+                lenc=96
+                llabel=48
             else
-                l_enc=36
-                l_label=18
+                lenc=36
+                llabel=18
             fi
         else
             ne=0
             nd=1
             if [ $data != ILI ]
             then
-                l_enc=0
-                l_label=96
+                lenc=0
+                llabel=96
             else
-                l_enc=0
-                l_label=36
+                lenc=0
+                llabel=36
             fi
         fi
 
@@ -87,20 +87,20 @@ do
 
         if [ $data != ILI ]
         then
-            l_preds=( 96 192 336 720 )
+            lpreds=( 96 192 336 720 )
         else
-            l_preds=( 24 36 48 60 )
+            lpreds=( 24 36 48 60 )
         fi
 
-        for l_pred in ${l_preds[@]}
+        for lpred in ${lpreds[@]}
         do
             python main.py \
                 --data $data \
                 --data_path $dpath \
                 --ckpt /usr2/home/yongyiw/ckpt/lstf/$data/$model/ \
-                --len_enc $l_enc \
-                --len_label $l_label \
-                --len_pred $l_pred \
+                --len_enc $lenc \
+                --len_label $llabel \
+                --len_pred $lpred \
                 --model $model \
                 --attn $attn \
                 --d_enc_in $ein \

@@ -5,16 +5,17 @@ conda activate lstf
 
 
 data=Synthetic
-l_enc=96
-l_label=48
-l_pred=192
-d_model=128
-d_ff=512
+lenc=96
+llabel=48
+lpred=192
+dm=128
+dff=512
 ne=2
 nd=1
 
+
 # Vanilla Autoformer
-for dataset in sinx sinx_x x xsinx sinx_sin2x_sin4x sinx_c
+for dataset in sinx x sinx_x sinx_sqrtx sinx_x2_asym sinx_x2_sym xsinx sinx_sin2x_sin4x sinx_c
 do
     for l_win in 5 13 25 51
     do
@@ -22,11 +23,13 @@ do
             --data $data \
             --data_path /usr2/home/yongyiw/data/synth/${dataset}.npy \
             --ckpt /usr2/home/yongyiw/ckpt/lstf/$data/$dataset/ \
-            --len_enc $l_enc \
-            --len_label $l_label \
-            --len_pred $l_pred \
+            --len_enc $lenc \
+            --len_label $llabel \
+            --len_pred $lpred \
             --model autoformer \
             --attn autocorrelation \
+            --d_model $dm \
+            --d_ff $dff \
             --n_enc_layers $ne \
             --n_dec_layers $nd \
             --len_window $l_win \
@@ -38,17 +41,19 @@ do
 done
 
 # No decomposition block
-for dataset in sinx sinx_x x xsinx
+for dataset in sinx x sinx_x sinx_sqrtx sinx_x2_asym sinx_x2_sym xsinx sinx_sin2x_sin4x sinx_c
 do
     python main.py \
         --data $data \
         --data_path /usr2/home/yongyiw/data/synth/${dataset}.npy \
         --ckpt /usr2/home/yongyiw/ckpt/lstf/$data/$dataset/ \
-        --len_enc $l_enc \
-        --len_label $l_label \
-        --len_pred $l_pred \
+        --len_enc $lenc \
+        --len_label $llabel \
+        --len_pred $lpred \
         --model autoformer \
         --attn autocorrelation \
+        --d_model $dm \
+        --d_ff $dff \
         --n_enc_layers $ne \
         --n_dec_layers $nd \
         --len_window 0 \
@@ -59,17 +64,19 @@ do
 done
 
 # Vanilla attention block
-for dataset in sinx_sin2x_sin4x sinx_c
+for dataset in sinx x sinx_x sinx_sqrtx sinx_x2_asym sinx_x2_sym xsinx sinx_sin2x_sin4x sinx_c
 do
     python main.py \
         --data $data \
         --data_path /usr2/home/yongyiw/data/synth/${dataset}.npy \
         --ckpt /usr2/home/yongyiw/ckpt/lstf/$data/$dataset/ \
-        --len_enc $l_enc \
-        --len_label $l_label \
-        --len_pred $l_pred \
+        --len_enc $lenc \
+        --len_label $llabel \
+        --len_pred $lpred \
         --model autoformer \
         --attn dot \
+        --d_model $dm \
+        --d_ff $dff \
         --n_enc_layers $ne \
         --n_dec_layers $nd \
         --len_window 25 \
