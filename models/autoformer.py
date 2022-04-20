@@ -29,15 +29,18 @@ class Autoformer(nn.Module):
         output_attn=False, 
     ): 
         super().__init__()
-        # Embedding
-        self.enc_embedding = DataEmbedding(d_enc_in, d_model, pos=False, temp=temp, freq=freq, bias=False, dropout=dropout)
-        self.dec_embedding = DataEmbedding(d_dec_in, d_model, pos=False, temp=temp, freq=freq, bias=False, dropout=dropout)
-        self.decomp = SeriesDecomposition(len_window) if len_window > 0 else None
+        # Preprocessing
         Attn = MultiheadAutoCorrelation if attn == 'autocorrelation' else MultiheadAttention
+        self.decomp = SeriesDecomposition(len_window) if len_window > 0 else None
+        pos = not isinstance(Attn, MultiheadAutoCorrelation)
+        bias = self.decomp is None
+        # Embedding
+        self.enc_embedding = DataEmbedding(d_enc_in, d_model, pos=pos, temp=temp, freq=freq, bias=bias, dropout=dropout)
+        self.dec_embedding = DataEmbedding(d_dec_in, d_model, pos=pos, temp=temp, freq=freq, bias=bias, dropout=dropout)
         # Encoder
         self.encoder = nn.ModuleList([
             AutoformerEncoderLayer(
-                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling), 
+                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling, dropout=dropout), 
                 d_model, 
                 d_ff, 
                 len_window=len_window, 
@@ -46,13 +49,12 @@ class Autoformer(nn.Module):
             ) for _ in range(n_enc_layers)
         ])
         self.enc_norm = nn.LayerNorm(d_model)
-        if self.decomp is not None: 
-            self.enc_norm.bias.requires_grad = False
+        self.enc_norm.bias.requires_grad = bias
         # Decoder
         self.decoder = nn.ModuleList([
             AutoformerDecoderLayer(
-                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling), 
-                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling), 
+                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling, dropout=dropout), 
+                Attn(d_model, n_heads=n_heads, c_sampling=c_sampling, dropout=dropout), 
                 d_model, 
                 d_ff, 
                 d_dec_out, 
@@ -62,8 +64,7 @@ class Autoformer(nn.Module):
             ) for _ in range(n_dec_layers)
         ])
         self.dec_norm = nn.LayerNorm(d_model)
-        if self.decomp is not None: 
-            self.dec_norm.bias.requires_grad = False
+        self.dec_norm.bias.requires_grad = bias
         # Output
         self.out_proj = nn.Linear(d_model, d_dec_out)
 

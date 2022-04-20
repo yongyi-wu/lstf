@@ -4,7 +4,7 @@ source $(conda info --base)/etc/profile.d/conda.sh
 conda activate lstf
 
 
-for model in enc-dec dec auto autoformer
+for model in enc-dec dec auto
 do
     for data in ETTm2 Electricity Exchange Traffic Weather ILI
     do
@@ -33,55 +33,34 @@ do
             fi
         fi
 
-        if [ $model = autoformer ]
-        then
-            attn=autocorrelation
-        else
-            attn=dot
-        fi
-
         case $data in
             ETTm2)
                 dpath=/usr2/home/yongyiw/data/ETT-small/ETTm2.csv
-                ein=7
-                din=7
-                dout=7
+                dim=7
                 ;;
             Electricity)
                 dpath=/usr2/home/yongyiw/data/electricity/electricity.csv
-                ein=321
-                din=321
-                dout=321
+                dim=321
                 ;;
             Exchange)
                 dpath=/usr2/home/yongyiw/data/exchange_rate/exchange_rate.csv
-                ein=8
-                din=8
-                dout=8
+                dim=8
                 ;;
             Traffic)
                 dpath=/usr2/home/yongyiw/data/traffic/traffic.csv
-                ein=862
-                din=862
-                dout=862
+                dim=862
                 ;;
             Weather)
                 dpath=/usr2/home/yongyiw/data/weather/weather.csv
-                ein=21
-                din=21
-                dout=21
+                dim=21
                 ;;
             ILI)
                 dpath=/usr2/home/yongyiw/data/illness/national_illness.csv
-                ein=7
-                din=7
-                dout=7
+                dim=7
                 ;;
             *)
                 dpath=/dev/null
-                ein=7
-                din=7
-                dout=7
+                dim=-1
                 ;;
         esac
 
@@ -102,10 +81,10 @@ do
                 --len_label $llabel \
                 --len_pred $lpred \
                 --model $model \
-                --attn $attn \
-                --d_enc_in $ein \
-                --d_dec_in $din \
-                --d_dec_out $dout \
+                --attn dot \
+                --d_enc_in $dim \
+                --d_dec_in $dim \
+                --d_dec_out $dim \
                 --n_enc_layers $ne \
                 --n_dec_layers $nd \
                 --output_attn \
