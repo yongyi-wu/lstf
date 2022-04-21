@@ -8,8 +8,6 @@ data=Synthetic
 lenc=96
 llabel=48
 lpred=192
-dm=128
-dff=512
 ne=2
 nd=1
 
@@ -27,8 +25,6 @@ do
             --len_pred $lpred \
             --model autoformer \
             --attn autocorrelation \
-            --d_model $dm \
-            --d_ff $dff \
             --n_enc_layers $ne \
             --n_dec_layers $nd \
             --len_window $lwin \
@@ -48,8 +44,6 @@ do
         --len_pred $lpred \
         --model autoformer \
         --attn autocorrelation \
-        --d_model $dm \
-        --d_ff $dff \
         --n_enc_layers $ne \
         --n_dec_layers $nd \
         --len_window 0 \
@@ -68,8 +62,6 @@ do
         --len_pred $lpred \
         --model autoformer \
         --attn dot \
-        --d_model $dm \
-        --d_ff $dff \
         --n_enc_layers $ne \
         --n_dec_layers $nd \
         --len_window 25 \
@@ -88,8 +80,6 @@ do
         --len_pred $lpred \
         --model autoformer \
         --attn dot \
-        --d_model $dm \
-        --d_ff $dff \
         --n_enc_layers $ne \
         --n_dec_layers $nd \
         --len_window 0 \

@@ -8,7 +8,7 @@ import torch
 from models import EncoderDecoderEstimator, DecoderOnlyEstimator, AutoregressionEstimator, AutoformerEstimator
 
 
-def parse_args(): 
+def build_parser(): 
     parser = argparse.ArgumentParser('[Experiment] Time Series Forecasting via Transformers')
 
     task = parser.add_argument_group('Task')
@@ -47,19 +47,19 @@ def parse_args():
     training.add_argument('--lr', type=float, default=1E-4, help='Optimizer learning rate')
     training.add_argument('--lr_schedule', action='store_true',help='Whether to use learning rate schedule')
     training.add_argument('--devices', type=int, default=[0], nargs='*',help='GPU device id(s); if not provided, use CPU instead')
+    training.add_argument('--no_verbose', action='store_true', help='Disable logging in stdout')
 
-    args = parser.parse_args()
-    args.config = '{}_{}_tf{}_f{}_le{}_ll{}_lp{}_m{}_attn{}_ein{}_din{}_dout{}_dm{}_dff{}_nh{}_ne{}_nd{}_lw{}_c{}_t{}_dr{}_E{}_B{}_p{}_lr{}_sch{}'.format(
-        args.desc.upper(), os.path.basename(args.data_path), args.task, args.freq, args.len_enc, args.len_label, args.len_pred, 
-        args.model, args.attn, args.d_enc_in, args.d_dec_in, args.d_dec_out, args.d_model, args.d_ff, args.n_heads, args.n_enc_layers, args.n_dec_layers, args.len_window, args.c_sampling, int(not args.no_temporal), 
-        args.dropout, args.n_epochs, args.batch_size, args.patience, args.lr, int(args.lr_schedule)
-    )
-    return args
+    return parser
 
 
 def main(): 
-    cfg = parse_args()
-    print(cfg)
+    parser = build_parser()
+    cfg = parser.parse_args()
+    cfg.config = '{}_{}_tf{}_f{}_le{}_ll{}_lp{}_m{}_attn{}_ein{}_din{}_dout{}_dm{}_dff{}_nh{}_ne{}_nd{}_lw{}_c{}_t{}_dr{}_E{}_B{}_p{}_lr{}_sch{}'.format(
+        cfg.desc.upper(), os.path.basename(cfg.data_path), cfg.task, cfg.freq, cfg.len_enc, cfg.len_label, cfg.len_pred, 
+        cfg.model, cfg.attn, cfg.d_enc_in, cfg.d_dec_in, cfg.d_dec_out, cfg.d_model, cfg.d_ff, cfg.n_heads, cfg.n_enc_layers, cfg.n_dec_layers, cfg.len_window, cfg.c_sampling, int(not cfg.no_temporal), 
+        cfg.dropout, cfg.n_epochs, cfg.batch_size, cfg.patience, cfg.lr, int(cfg.lr_schedule)
+    )
 
     if cfg.model == 'enc-dec': 
         Estimator = EncoderDecoderEstimator

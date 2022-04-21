@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import logging
+from logging import handlers
 import os
 import random
 import re
@@ -28,17 +29,21 @@ def make_if_not_exists(new_dir):
         os.system('mkdir -p {}'.format(new_dir))
 
 
-def config_logging(log_dir): 
+def config_logging(log_dir, verbose=True): 
     make_if_not_exists(log_dir)
     file_handler = logging.FileHandler(
         filename=os.path.join(log_dir, 'exp.log')
     )
     stdout_handler = logging.StreamHandler(sys.stdout)
+    if verbose: 
+        handlers = [file_handler, stdout_handler]
+    else: 
+        handlers = [file_handler]
     logging.basicConfig(
         level=logging.INFO, 
         format='%(asctime)s\t%(message)s', 
         datefmt='%m/%d/%Y %H:%M:%S', 
-        handlers=[file_handler, stdout_handler]
+        handlers=handlers
     )
     logger = logging.getLogger('train')
     return logger
@@ -48,6 +53,7 @@ class BaseEstimator(object):
     """A wrapper class to perform training, evluation or testing while accumulating and logging results"""
     def __init__(self, cfg): 
         self.cfg = cfg
+        self.verbose = not self.cfg.no_verbose
         self.model = self.get_model()
         self.criterion, self.optimizer, self.scheduler = self._get_auxiliaries()
         self.device = self._get_devices()
@@ -61,7 +67,7 @@ class BaseEstimator(object):
         time = datetime.now().strftime('%m-%d_%H-%M')
         self.ckpt = os.path.join(self.cfg.ckpt, self.cfg.config, time)
         make_if_not_exists(self.ckpt)
-        self.logger = config_logging(self.cfg.ckpt)
+        self.logger = config_logging(self.cfg.ckpt, self.verbose)
         self.logger.info('[CONFIG]\t{}'.format(self.cfg.config))
         self.writer = SummaryWriter(self.ckpt)
         self.ckpt_path = os.path.join(self.ckpt, 'ckpt.pt')
@@ -82,10 +88,10 @@ class BaseEstimator(object):
         trainloader = DataLoader(trainset, self.cfg.batch_size, shuffle=True, drop_last=True)
 
         devset = Data('dev', data_path, len_enc, len_label, len_pred, freq)
-        devloader = DataLoader(devset, self.cfg.batch_size * 4, shuffle=False)
+        devloader = DataLoader(devset, self.cfg.batch_size, shuffle=False, drop_last=True)
         
         testset = Data('test', data_path, len_enc, len_label, len_pred, freq)
-        testloader = DataLoader(testset, self.cfg.batch_size * 4, shuffle=False)
+        testloader = DataLoader(testset, self.cfg.batch_size, shuffle=False, drop_last=True)
 
         return trainloader, devloader, testloader
 
@@ -105,7 +111,7 @@ class BaseEstimator(object):
             scheduler = optim.lr_scheduler.LambdaLR(
                 optimizer, 
                 lambda epoch: 0.5 ** (epoch // 1), 
-                verbose=True
+                verbose=self.verbose
             )
         else: 
             scheduler = None
@@ -118,10 +124,12 @@ class BaseEstimator(object):
             self.criterion.to(device)
             if len(self.cfg.devices) > 1: 
                 self.model = nn.DataParallel(self.model, device_ids=self.cfg.devices)
-            print('Use CUDA: {}'.format(self.cfg.devices))
+            if self.verbose: 
+                print('Use CUDA: {}'.format(self.cfg.devices))
         else: 
             device = torch.device('cpu')
-            print('Use CPU')
+            if self.verbose: 
+                print('Use CPU')
         return device
 
     def _step(self, data): 
@@ -243,7 +251,8 @@ class BaseEstimator(object):
         torch.save(checkpoint, ckpt_path)
 
     def load(self, ckpt_path): 
-        print('Loading checkpoint {}'.format(ckpt_path))
+        if self.verbose: 
+            print('Loading checkpoint {}'.format(ckpt_path))
         checkpoint = torch.load(ckpt_path)
         self.epochs = checkpoint['epochs']
         self.train_steps = checkpoint['train_steps']
