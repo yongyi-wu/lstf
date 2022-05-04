@@ -1,6 +1,5 @@
 # Self-defined
-*.ipynb
-!scripts/*.ipynb
+notebooks/img
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
