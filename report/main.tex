@@ -1,0 +1,86 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath,amssymb,amsthm,fullpage,bm,graphicx,accents}
+\usepackage{listings,lstautogobble,color,subcaption}
+\usepackage{hyperref}
+\usepackage{natbib}
+
+\input{math.tex}
+\newcommand{\argmin}{\mathop{\mathrm{argmin}}}
+\newcommand{\argmax}{\mathop{\mathrm{argmax}}}
+
+\title{Toward Understanding Long Sequence Time Series Forecasting via Transformers}
+\author{Ethan Wu, Donghan Yu, Ruohong Zhang, Yiming Yang}
+\date{\today}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+Making long sequence forecasting on time series involves a number of modeling challenges. 
+Nonetheless, Transformer architecture inspires recent progress in this domain. 
+In this report, we focus on two major advancements: non-autoregressive decoding and Autoformer architecture. 
+A number of experiments on real-world and synthetic datasets are performed to verify their superior performance and investigate their working mechanism. 
+In addition, the benefits and drawbacks of different methods are discussed. 
+We summarize our findings and interpretations in the final discussion. \footnote{The code is available at: \href{https://github.com/yongyi-wu/lstf}{https://github.com/yongyi-wu/lstf}.}
+\end{abstract}
+
+\section{Introduction}
+Time series has long been a heated research domain for the machine learning community. 
+Successful modeling of temporal patterns has profound applications in finance, logistics, natural sciences, etc. 
+The forecasting task can be formulated as predicting observations in the future $\Xv_\text{output} \in \Rb^{L_\text{target} \times d}$ based on the observations up until now $\Xv_\text{input} \in \Rb^{L_\text{input} \times d}$. 
+However, non-stationarity in many real-world scenarios complicates the task. 
+Another challenge arises due to multivariate signal ($d > 1$), which entails the consideration of spatial relationship. 
+Finally, long sequence forecasting (large $L_\text{target}$), which involves predictions for tens or hundreds of future timestamps, requires the ability to capture long-term dependencies. 
+
+The neural network approach to time series forecasting was once dominated by Recurrent Nueral Networks (\citet{https://doi.org/10.48550/arxiv.1703.07015}).  
+More recently, however, Transformer due to \citet{https://doi.org/10.48550/arxiv.1706.03762} has created a new paradigm for the deep learning community. 
+The architecture has achieved record-breaking successes in a number of Computer Vision and Natural Language Processing tasks. 
+A subsequent question is how we can adopt this architecture to tackle challenges in time series forecasting. 
+\citet{https://doi.org/10.48550/arxiv.1907.00235} introduces the LogSparse Transformer to reduce the asymptotic cost of the multihead attention. 
+The Informer due to \citet{https://doi.org/10.48550/arxiv.2012.07436} leverages non-autoregressive decoding and renovates the attention mechanism again. 
+By injecting stronger inductive biases, \citet{https://doi.org/10.48550/arxiv.2106.13008} replaces the attention and layer normalization (\citet{https://doi.org/10.48550/arxiv.1607.06450}) modules by autocorrelation and decomposition modules, respectively. 
+While retaining the decomposition scheme, FEDformer by \citet{https://doi.org/10.48550/arxiv.2201.12740} shifts to modeling frequency-domain signals instead. 
+
+Of all recent progress, Informer (\citet{https://doi.org/10.48550/arxiv.2012.07436}) and Autoformer (\citet{https://doi.org/10.48550/arxiv.2106.13008}) have shown most dramatic improvement compared to previous methods, which motivate the experiments presented in this report. 
+In particular, we conduct comprehensive ablation studies on real and synthetic datasets to: \begin{itemize}
+    \item Verify the superior performance of Informer's non-autoregressive decoding versus the autoregressive counterpart; 
+    \item Investigate the inductive biases in Autoformer's autocorrelation module and decomposition module. 
+\end{itemize}
+
+
+\section{Non-Autoregressive Decoding}
+\input{non-autoregressive.tex}
+
+
+\section{Autoformer Architecture}
+\input{autoformer.tex}
+
+
+\section{Discussion}
+This report reviews the recent progress of using Transformer and its variants on the time series forecasting task. 
+In particular, we focus on non-autoregressive decoding, seasonal-trend decomposition module and autocorrelation module, which empirically yields largest performance gains, and conduct comprehensive probing experiemnts to understand their working mechanism. 
+
+Shifting from autoregressive decoding to non-autoregressive decoding retains the original performance. 
+That the shift is not as easy in conventional Natural Langauge Processing tasks as in this case may due to different statistical regularities in natural languages and time series. 
+Nonetheless, the empirical results suggest non-autoregressive method as a baseline for architectural innovations. 
+In contrast, the asymptotic improvement of attention mechanism creates little, if any, speedup, possibly because of the introduced overhead. 
+
+Despite non-parametric and seemingly naive, the decomposition module dramatically improves various Transformers across synthetic and real-world datasets. 
+Still, it is not perfect. According to results on the synthetic datasets, this module may introduce noise into inherently clean and non-stationary data; also, it takes a hyperparameter which is hard to determine analytically in real world scenarios. 
+With that being said, the ability to recalibrate the level at which predictions are performed makes it a strong baseline. 
+
+Autocorrelation module performs sequence-level attention, replacing the vanilla token-level attention. 
+Although it achieves respectable performance gain on untrended synthetic datasets, it is vulnerable to the interference of trended signals. 
+Furthermore, the autocorrelation weights lack the explainability as its attention counterpart. 
+
+In conclusion, non-autoregressive decoding is worth to be considered as a baseline approach. 
+Besides, Autoformer's successes suggest future work improving the detrending mechanism and enhancing the sequence-level attention's robustness. 
+
+
+\newpage
+\bibliographystyle{plainnat}
+\bibliography{reference.bib}
+
+
+\newpage
+\input{appendix.tex}
+\end{document}
