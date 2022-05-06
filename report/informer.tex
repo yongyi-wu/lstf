@@ -1,15 +1,10 @@
 \subsection{Architecture}
-Informer (\citet{https://doi.org/10.48550/arxiv.2012.07436}) is the first Transformer variant that exploites non-autoregressive decoding (termed \textit{generative inference} in the paper) for time series forecasting. 
-The key idea is to predict $L_\text{target}$ future timestamps in just one forward pass and thus save inference time. 
-In this section, we focus on vanilla Transformers (\citet{https://doi.org/10.48550/arxiv.1706.03762}) with different decoding schemes. 
+Informer (\citet{https://doi.org/10.48550/arxiv.2012.07436}) leverages the non-autoregressive decoding (termed \textit{generative inference} in the paper) for time series forecasting. 
+The main idea is to predict $L_\text{target}$ future timestamps in just one forward pass. 
+The model also develops an asymptotically efficient attention mechanism called ProbSparse attention, although we empirically show that it performs no better than vanilla attention in terms of speed and accuracy. 
+Therefore, in this section, we focus on vanilla multihead attention (\citet{https://doi.org/10.48550/arxiv.1706.03762}) with different decoding schemes. 
 
-\subsubsection{Multihead Attention}
-The attention mechanism follows the vanilla multihead attention. 
-Within each head, the output is computed by $$\text{Attention}(\Qv, \Kv, \Vv) = \text{softmax}(\frac{\Qv\Kv^T}{\sqrt{d}}) \Vv.$$
-Overall, the output is $\text{Multihead}(\Qv, \Kv, \Vv) = [\text{head}_1 \| \text{head}_2 \| \cdots \| \text{head}_h]\Wv^O$, where we define $\text{head}_i = \text{Attention}(\Qv\Wv_i^Q, \Kv\Wv_i^K, \Vv\Wv_i^V)$. 
-Here, $\|$ is the concatenation operator and $\Wv$'s are projection matrices of appropriate shapes. 
-
-\subsubsection{Decoder}
+\subsubsection{Non-Autoregressive Decoder}
 The autoregressive decoder follows the design of seq2seq Transformer models. 
 In a long sequence forecasting setting, when predicting values $X_{j, *} \in \Rb^{d}$ at timestamp $j$, we concatenate all previous predictions $\hat{\Xv}_{<j, *} \in \Rb^{(j - 1) \times d}$ and feed them into the model.  
 Notice that this decoding scheme is inherently sequential and hence can be extremely slow during inference. 
@@ -23,17 +18,26 @@ Finally, a triangular causal mask is applied to decoder's self attention module 
 
 \begin{figure}
     \centering
-    \includegraphics[width=0.4\textwidth]{img/nonauto_input.png}
+    \includegraphics[width=0.3\textwidth]{img/nonauto_input.png}
     \caption{Input to a non-autoregressive decoder.}
     \label{fig:nonauto_input}
 \end{figure}
+
+\subsubsection{ProbSparse Attention Module}
+For each head of a vanilla multihead attention module, the output is computed by $$\text{Attention}(\Qv, \Kv, \Vv) = \text{softmax}(\frac{\Qv\Kv^T}{\sqrt{d}}) \Vv.$$
+Overall, the output is $\text{Multihead}(\Qv, \Kv, \Vv) = [\text{head}_1 \| \text{head}_2 \| \cdots \| \text{head}_h]\Wv^O$, where we define $\text{head}_i = \text{Attention}(\Qv\Wv_i^Q, \Kv\Wv_i^K, \Vv\Wv_i^V)$. 
+Here, $\|$ is the concatenation operator and $\Wv$'s are projection matrices of appropriate shapes. 
+
+ProbSparse attention assumes the sparicty in the query signal and only select a sparse subset of tokens $\overline{\Qv}$ to compute $\text{Multihead}(\overline{\Qv}, \Kv, \Vv)$. 
+More details can be found in the Informer's paper. 
+However, as noted previously we only use vanilla attention to perform analysis in this section. 
 
 \subsection{Experiments}
 
 While the Informer paper (\citet{https://doi.org/10.48550/arxiv.2012.07436}) does contain an ablation study on the non-autoregressive decoding, only two prediction lengths $L_\text{target}$ are examined and the authors did not decouple the influence of the noval attention module. 
 To verify the superiority of a non-autoregressive decoder, we run more experiments on six real-world benchmarks and observe expected results. 
 
-Interestingly, we also notice that the decoder taking input as Figure \ref{fig:nonauto_input} is sufficient to perform forecasting. 
+Interestingly, we notice that the decoder taking input as Figure \ref{fig:nonauto_input} is sufficient to perform forecasting. 
 Therefore, we remove encoder and evaluate the \texttt{Decoder-Only} model as well. 
 
 \subsubsection{Datasets}\label{benchmarks}
@@ -58,7 +62,7 @@ Overall, non-autoregressive decoding performs on par with, if not better than, a
 The gap is especially large in \texttt{Electricity} and \texttt{Traffic} datasets. 
 A possible reason is that time series forecasting relies more on an understanding of large-scale pattern; 
 instead, the dependencies on previous one timestamp or two are rather weak. 
-Therefore, autoregression does not bring about significant advantage. 
+Therefore, autoregression does not possess significant advantage. 
 
 \begin{figure}
     \centering
@@ -74,7 +78,7 @@ Meanwhile, it reinforces the necessity of incorporating non-autoregressive decod
 
 \begin{figure}
     \centering
-    \includegraphics[width=0.6\textwidth]{img/nonauto_time.png}
+    \includegraphics[width=0.5\textwidth]{img/nonauto_time.png}
     \caption{Inference speed measured by second on the \texttt{ETTh1} test dataset.}
     \label{fig:nonauto_time}
 \end{figure}

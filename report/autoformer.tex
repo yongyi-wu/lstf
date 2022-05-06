@@ -13,7 +13,7 @@ The idea is to emulate the traditional seasonal-trend decomposition (\citet{clev
 \subsubsection{Decomposition Module}
 The module aims at decomposing the input signal $X \in \Rb^L$ into trend $T \in \Rb^L$ and seasonality $S \in \Rb^L$ such that $X = T + S$. 
 The trend is expected to contain long-term non-stationary changes, whereas seasonality is more concerned about cyclical patterns. 
-To this end, we just compute moving average (i.e. perform average pooling) along the temporal domain to obtain trend, and substact it element-wise from the input signal to get seasonality. 
+To this end, we just compute moving average (i.e. perform average pooling) along the temporal domain to obtain the trend, and substact it element-wise to get seasonality. 
 Mathematically, we have \begin{align*}
     T &= \text{AvgPool}(X) & S &= X - T.
 \end{align*}
@@ -31,7 +31,7 @@ Finally, the output is the linear combination of $k$ different wrap-arounded (i.
 
 \begin{figure}
     \centering
-    \includegraphics[width=0.8\textwidth]{img/autocorrelation.png}
+    \includegraphics[width=0.6\textwidth]{img/autocorrelation.png}
     \caption{A visualization of autocorrelation module.}
     \label{fig:autocorrelation}
 \end{figure}
@@ -45,16 +45,16 @@ On top of real-world benchmarks, we generate nine synthetic datasets of various 
 Except stated explicitly, the models are trained and evaluated under the same hyperparameter setting. 
 
 \subsubsection{Datasets}
-To avoid complicating the analysis, all synthetic datasets are univariate with the same length, that is, 8k timestamps. 
-We take one periodic dataset, \texttt{sinx}, as an example to illustrate the data generation process. 
-To begin, we initialize a equally spaced sequence $$X = [\cdots, -0.75, -0.50, -0.25, 0., 0.25, 0.50, 0.75, \cdots].$$
+To avoid complicating the analysis, all synthetic datasets are univariate ($d = 1$) with the same length, that is, 8k timestamps. 
+We take one untrended dataset, \texttt{sinx}, as an example to illustrate the data generation process. 
+To begin, we initialize a equally spaced sequence of length 8k: $$X = [\cdots, -0.75, -0.50, -0.25, 0., 0.25, 0.50, 0.75, \cdots].$$
 Then, we feed it into some pre-defined function (\texttt{sin} in this case). 
 Finally, Gaussian noise with zero mean and appropriate standard deviation is added. 
 Importantly, we make the underlying period (if any) so small that the length of the encoder input (see Figure \ref{fig:sinx}) is sufficient to discover periodicity. 
 
 \begin{figure}
     \centering
-    \includegraphics[width=0.6\textwidth]{img/data_sinx.png}
+    \includegraphics[width=0.5\textwidth]{img/data_sinx.png}
     \caption{A subsequence of the entire \texttt{sinx} dataset. 
     To the left of the black vertical line is fed into the encoder, while to the right is to be predicted. 
     The encoder \textit{should} be able to discover the periodicity.}
@@ -67,10 +67,10 @@ Denoting standard Gaussian noise by $\Nc$, we present an overview of different d
 Readers may proceed to Appendix \ref{app:data} for visualizations of all datasets. \begin{itemize}
     \item Trended \begin{itemize}
         \item \texttt{x}: $Y = X + \Nc$. This is just a canonical trend. 
-        \item \texttt{sinx\_x}: $Y = 10\sin X + X + \Nc$. This additively combines the canonical trend with a cyclical pattern. Signal-trend decomposition is supposed to work well in this case. 
+        \item \texttt{sinx\_x}: $Y = 10\sin X + X + \Nc$. It additively combines the canonical trend with a cyclical pattern. Signal-trend decomposition should work well in this case. 
         \item \texttt{sinx\_sqrtx}: $Y = 10\sin X + 20\sqrt{X - \min(X)} + \Nc$. The trend is non-linear and, more specifically, concave downward. 
         \item \texttt{sinx\_x2\_sym}: $Y = 10\sin X + (\frac{X}{50})^2 + \Nc$. The trend is symmetric and concave upward. 
-        \item \texttt{sinx\_x2\_asym}: $Y = 10\sin X + (\frac{X - \min(X)}{30})^2 + \Nc$. The trend is assymetric and concave upward. The training dataset and test dataset have drastically different means. 
+        \item \texttt{sinx\_x2\_asym}: $Y = 10\sin X + (\frac{X - \min(X)}{30})^2 + \Nc$. The trend is assymetric and concave upward. The training and test datasets have drastically different means. 
     \end{itemize}
     \item Untrended \begin{itemize}
         \item \texttt{sinx}: $Y = 10\sin X + \Nc$. This is just a canonical periodic pattern. Autocorrelation module should be able to capture it. 
@@ -80,7 +80,7 @@ Readers may proceed to Appendix \ref{app:data} for visualizations of all dataset
     \end{itemize}
 \end{itemize}
 
-Meanwhile, we also perform ablation studies on the aforementioned benchmarks. Detailed dataset descriptions can be found in Section \ref{benchmarks}. 
+Meanwhile, we also perform ablation studies on the aforementioned real-world datasets. Detailed dataset descriptions can be found in Section \ref{benchmarks}. 
 
 \subsubsection{Results}
 
@@ -149,9 +149,10 @@ Therefore, the working mechanism of the autocorrelation module appears to be a b
     \centering
     \includegraphics[width=\textwidth]{img/mse_real.png}
     \caption{Mean square errors vanilla Transformer and its variants on real-world datasets.}
+    \label{fig:mse_real}
 \end{figure}
 
-Finally, we include the results on real-world datasets. 
+Finally, we show the results on real-world datasets in Figure \ref{fig:mse_real}. 
 The baseline model is vanilla Transformer and we replaces the attention module by autocorrelation module and/or layer normlization module by decomposition module. 
 Consistent with findings due to \citet{https://doi.org/10.48550/arxiv.2106.13008}, the greatest empirical improvement comes from the decomposition module. 
 However, the effect of autocorrelation module is more nuanced. 
